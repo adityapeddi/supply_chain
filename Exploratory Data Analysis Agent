@@ -1,0 +1,1560 @@
+#!/usr/bin/env python3
+"""
+Exploratory Data Analysis Agent
+
+This agent is responsible for:
+1. Analyzing data collected by the Data Extraction Agent
+2. Generating meaningful business insights
+3. Identifying patterns and trends in retail inventory data
+4. Producing visualizations and reports for decision-making
+
+Author: Aditya Peddi
+Date: March 31, 2025
+"""
+
+import os
+import sys
+import json
+import logging
+import sqlite3
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Union, Tuple
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from statsmodels.tsa.seasonal import seasonal_decompose
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from scipy import stats
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("eda_agent.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("EDAAgent")
+
+class DataLoader:
+    """Loads data from the database created by the Data Extraction Agent"""
+    
+    def __init__(self, db_path: str = "retail_data.db"):
+        """
+        Initialize the data loader
+        
+        Args:
+            db_path: Path to the SQLite database file
+        """
+        self.db_path = db_path
+        logger.info(f"Initialized data loader with database at {db_path}")
+    
+    def load_stock_data(self, symbols: Optional[List[str]] = None, 
+                        start_date: Optional[str] = None, 
+                        end_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        Load stock data from the database
+        
+        Args:
+            symbols: List of stock symbols to filter by (optional)
+            start_date: Start date in ISO format (YYYY-MM-DD) (optional)
+            end_date: End date in ISO format (YYYY-MM-DD) (optional)
+            
+        Returns:
+            DataFrame containing stock data
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = "SELECT * FROM stock_data"
+            conditions = []
+            
+            if symbols:
+                symbols_str = "', '".join(symbols)
+                conditions.append(f"symbol IN ('{symbols_str}')")
+            
+            if start_date:
+                conditions.append(f"date >= '{start_date}'")
+            
+            if end_date:
+                conditions.append(f"date <= '{end_date}'")
+            
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Loaded {len(df)} stock data records")
+            
+            # Convert date column to datetime
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading stock data: {str(e)}")
+            return pd.DataFrame()
+    
+    def load_sales_data(self, categories: Optional[List[str]] = None,
+                        start_date: Optional[str] = None,
+                        end_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        Load sales data from the database
+        
+        Args:
+            categories: List of product categories to filter by (optional)
+            start_date: Start date in ISO format (YYYY-MM-DD) (optional)
+            end_date: End date in ISO format (YYYY-MM-DD) (optional)
+            
+        Returns:
+            DataFrame containing sales data
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = "SELECT * FROM sales_data"
+            conditions = []
+            
+            if categories:
+                categories_str = "', '".join(categories)
+                conditions.append(f"category IN ('{categories_str}')")
+            
+            if start_date:
+                conditions.append(f"date >= '{start_date}'")
+            
+            if end_date:
+                conditions.append(f"date <= '{end_date}'")
+            
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Loaded {len(df)} sales data records")
+            
+            # Convert date column to datetime
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading sales data: {str(e)}")
+            return pd.DataFrame()
+    
+    def load_shipping_data(self) -> pd.DataFrame:
+        """
+        Load shipping data from the database
+        
+        Returns:
+            DataFrame containing shipping data
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = "SELECT * FROM shipping_data"
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Loaded {len(df)} shipping data records")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading shipping data: {str(e)}")
+            return pd.DataFrame()
+    
+    def load_supplier_data(self, categories: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        Load supplier data from the database
+        
+        Args:
+            categories: List of supplier categories to filter by (optional)
+            
+        Returns:
+            DataFrame containing supplier data
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = "SELECT * FROM supplier_data"
+            
+            if categories:
+                categories_str = "', '".join(categories)
+                query += f" WHERE category IN ('{categories_str}')"
+            
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Loaded {len(df)} supplier data records")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading supplier data: {str(e)}")
+            return pd.DataFrame()
+    
+    def load_economic_data(self, countries: Optional[List[str]] = None,
+                          indicators: Optional[List[str]] = None,
+                          start_date: Optional[str] = None,
+                          end_date: Optional[str] = None) -> pd.DataFrame:
+        """
+        Load economic data from the database
+        
+        Args:
+            countries: List of countries to filter by (optional)
+            indicators: List of economic indicators to filter by (optional)
+            start_date: Start date in ISO format (YYYY-MM-DD) (optional)
+            end_date: End date in ISO format (YYYY-MM-DD) (optional)
+            
+        Returns:
+            DataFrame containing economic data
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = "SELECT * FROM economic_data"
+            conditions = []
+            
+            if countries:
+                countries_str = "', '".join(countries)
+                conditions.append(f"country IN ('{countries_str}')")
+            
+            if indicators:
+                indicators_str = "', '".join(indicators)
+                conditions.append(f"indicator IN ('{indicators_str}')")
+            
+            if start_date:
+                conditions.append(f"date >= '{start_date}'")
+            
+            if end_date:
+                conditions.append(f"date <= '{end_date}'")
+            
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Loaded {len(df)} economic data records")
+            
+            # Convert date column to datetime
+            if 'date' in df.columns:
+                df['date'] = pd.to_datetime(df['date'])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error loading economic data: {str(e)}")
+            return pd.DataFrame()
+    
+    def load_all_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Load all data from the database
+        
+        Returns:
+            Dictionary of DataFrames containing all data types
+        """
+        logger.info("Loading all data from database")
+        
+        data = {
+            "stock_data": self.load_stock_data(),
+            "sales_data": self.load_sales_data(),
+            "shipping_data": self.load_shipping_data(),
+            "supplier_data": self.load_supplier_data(),
+            "economic_data": self.load_economic_data()
+        }
+        
+        return data
+
+
+class DataAnalyzer:
+    """Analyzes data to generate insights for retail inventory optimization"""
+    
+    def __init__(self, output_dir: str = "analysis_results"):
+        """
+        Initialize the data analyzer
+        
+        Args:
+            output_dir: Directory to save analysis results
+        """
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Set up visualization style
+        plt.style.use('seaborn-v0_8-whitegrid')
+        sns.set_palette("viridis")
+        
+        logger.info(f"Initialized data analyzer with output directory at {output_dir}")
+    
+    def analyze_sales_trends(self, sales_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Analyze sales trends by category
+        
+        Args:
+            sales_df: DataFrame containing sales data
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        logger.info("Analyzing sales trends")
+        
+        if sales_df.empty:
+            logger.warning("Sales data is empty, skipping analysis")
+            return {}
+        
+        try:
+            # Ensure date column is datetime
+            sales_df['date'] = pd.to_datetime(sales_df['date'])
+            
+            # Group by category and date, then calculate daily sales
+            daily_sales = sales_df.groupby(['category', 'date'])['sales'].sum().reset_index()
+            
+            # Calculate weekly and monthly aggregates
+            daily_sales['week'] = daily_sales['date'].dt.isocalendar().week
+            daily_sales['month'] = daily_sales['date'].dt.month
+            daily_sales['year'] = daily_sales['date'].dt.year
+            
+            weekly_sales = daily_sales.groupby(['category', 'year', 'week'])['sales'].sum().reset_index()
+            monthly_sales = daily_sales.groupby(['category', 'year', 'month'])['sales'].sum().reset_index()
+            
+            # Calculate growth rates
+            category_growth = {}
+            for category in sales_df['category'].unique():
+                cat_sales = daily_sales[daily_sales['category'] == category].copy()
+                if len(cat_sales) > 30:  # Need at least a month of data
+                    # Calculate month-over-month growth
+                    first_month_sales = cat_sales[cat_sales['date'] <= cat_sales['date'].min() + pd.Timedelta(days=30)]['sales'].sum()
+                    last_month_sales = cat_sales[cat_sales['date'] >= cat_sales['date'].max() - pd.Timedelta(days=30)]['sales'].sum()
+                    
+                    if first_month_sales > 0:
+                        growth_rate = (last_month_sales - first_month_sales) / first_month_sales
+                        category_growth[category] = growth_rate
+            
+            # Identify seasonal patterns
+            seasonal_patterns = {}
+            for category in sales_df['category'].unique():
+                cat_sales = daily_sales[daily_sales['category'] == category].copy()
+                if len(cat_sales) >= 14:  # Need at least two weeks of data
+                    # Resample to daily frequency and fill missing values
+                    cat_ts = cat_sales.set_index('date')['sales']
+                    cat_ts = cat_ts.resample('D').mean().fillna(method='ffill')
+                    
+                    if len(cat_ts) >= 14:
+                        try:
+                            # Perform seasonal decomposition
+                            result = seasonal_decompose(cat_ts, model='additive', period=7)  # Assuming weekly seasonality
+                            
+                            # Calculate seasonality strength
+                            seasonality_strength = np.std(result.seasonal) / np.std(result.resid)
+                            seasonal_patterns[category] = {
+                                'seasonality_strength': seasonality_strength,
+                                'peak_day': result.seasonal.idxmax().day_name(),
+                                'trough_day': result.seasonal.idxmin().day_name()
+                            }
+                        except Exception as e:
+                            logger.warning(f"Could not perform seasonal decomposition for {category}: {str(e)}")
+            
+            # Create visualizations
+            self._plot_sales_trends(daily_sales, 'Daily')
+            self._plot_sales_trends(weekly_sales, 'Weekly')
+            self._plot_sales_trends(monthly_sales, 'Monthly')
+            
+            # Compile results
+            results = {
+                'total_sales_by_category': daily_sales.groupby('category')['sales'].sum().to_dict(),
+                'category_growth_rates': category_growth,
+                'seasonal_patterns': seasonal_patterns,
+                'visualization_paths': {
+                    'daily_sales': os.path.join(self.output_dir, 'daily_sales_trends.png'),
+                    'weekly_sales': os.path.join(self.output_dir, 'weekly_sales_trends.png'),
+                    'monthly_sales': os.path.join(self.output_dir, 'monthly_sales_trends.png')
+                }
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error analyzing sales trends: {str(e)}")
+            return {}
+    
+    def _plot_sales_trends(self, sales_df: pd.DataFrame, time_period: str):
+        """
+        Create sales trend plots
+        
+        Args:
+            sales_df: DataFrame containing sales data
+            time_period: String indicating the time period (Daily, Weekly, Monthly)
+        """
+        try:
+            plt.figure(figsize=(12, 6))
+            
+            if time_period == 'Daily':
+                pivot_df = sales_df.pivot(index='date', columns='category', values='sales')
+                pivot_df.plot(ax=plt.gca())
+                plt.title(f'{time_period} Sales by Category')
+                plt.xlabel('Date')
+            elif time_period == 'Weekly':
+                for category in sales_df['category'].unique():
+                    cat_data = sales_df[sales_df['category'] == category]
+                    plt.plot(cat_data['week'] + cat_data['year'] * 100, cat_data['sales'], label=category)
+                plt.title(f'{time_period} Sales by Category')
+                plt.xlabel('Year-Week')
+            elif time_period == 'Monthly':
+                for category in sales_df['category'].unique():
+                    cat_data = sales_df[sales_df['category'] == category]
+                    plt.plot(cat_data['month'] + cat_data['year'] * 100, cat_data['sales'], label=category)
+                plt.title(f'{time_period} Sales by Category')
+                plt.xlabel('Year-Month')
+            
+            plt.ylabel('Sales')
+            plt.legend(title='Category')
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, f'{time_period.lower()}_sales_trends.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating {time_period.lower()} sales trend plot: {str(e)}")
+    
+    def analyze_stock_performance(self, stock_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Analyze stock performance of retail companies
+        
+        Args:
+            stock_df: DataFrame containing stock data
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        logger.info("Analyzing stock performance")
+        
+        if stock_df.empty:
+            logger.warning("Stock data is empty, skipping analysis")
+            return {}
+        
+        try:
+            # Ensure date column is datetime
+            stock_df['date'] = pd.to_datetime(stock_df['date'])
+            
+            # Calculate daily returns
+            stock_returns = {}
+            volatility = {}
+            sharpe_ratios = {}
+            
+            for symbol in stock_df['symbol'].unique():
+                symbol_data = stock_df[stock_df['symbol'] == symbol].sort_values('date')
+                
+                if len(symbol_data) > 1:
+                    # Calculate daily returns
+                    symbol_data['daily_return'] = symbol_data['close'].pct_change()
+                    
+                    # Calculate metrics
+                    avg_return = symbol_data['daily_return'].mean()
+                    std_return = symbol_data['daily_return'].std()
+                    
+                    stock_returns[symbol] = avg_return
+                    volatility[symbol] = std_return
+                    
+                    # Calculate Sharpe ratio (assuming risk-free rate of 0.01/252 for daily data)
+                    risk_free_rate = 0.01 / 252  # Approximate daily risk-free rate
+                    sharpe_ratio = (avg_return - risk_free_rate) / std_return if std_return > 0 else 0
+                    sharpe_ratios[symbol] = sharpe_ratio
+            
+            # Create visualizations
+            self._plot_stock_performance(stock_df)
+            self._plot_stock_volatility(stock_returns, volatility, sharpe_ratios)
+            
+            # Calculate correlations between stocks
+            pivot_df = stock_df.pivot(index='date', columns='symbol', values='close')
+            returns_df = pivot_df.pct_change().dropna()
+            correlation_matrix = returns_df.corr()
+            
+            # Plot correlation heatmap
+            plt.figure(figsize=(10, 8))
+            sns.heatmap(correlation_matrix, annot=True, cmap='coolwarm', vmin=-1, vmax=1)
+            plt.title('Stock Return Correlations')
+            plt.tight_layout()
+            plt.savefig(os.path.join(self.output_dir, 'stock_correlations.png'), dpi=300)
+            plt.close()
+            
+            # Compile results
+            results = {
+                'average_returns': stock_returns,
+                'volatility': volatility,
+                'sharpe_ratios': sharpe_ratios,
+                'correlation_matrix': correlation_matrix.to_dict(),
+                'visualization_paths': {
+                    'stock_performance': os.path.join(self.output_dir, 'stock_performance.png'),
+                    'stock_volatility': os.path.join(self.output_dir, 'stock_volatility.png'),
+                    'stock_correlations': os.path.join(self.output_dir, 'stock_correlations.png')
+                }
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error analyzing stock performance: {str(e)}")
+            return {}
+    
+    def _plot_stock_performance(self, stock_df: pd.DataFrame):
+        """
+        Create stock performance plot
+        
+        Args:
+            stock_df: DataFrame containing stock data
+        """
+        try:
+            plt.figure(figsize=(12, 6))
+            
+            # Normalize stock prices to start at 100 for comparison
+            for symbol in stock_df['symbol'].unique():
+                symbol_data = stock_df[stock_df['symbol'] == symbol].sort_values('date')
+                
+                if len(symbol_data) > 0:
+                    first_price = symbol_data['close'].iloc[0]
+                    normalized_prices = symbol_data['close'] / first_price * 100
+                    
+                    plt.plot(symbol_data['date'], normalized_prices, label=symbol)
+            
+            plt.title('Normalized Stock Performance (Base = 100)')
+            plt.xlabel('Date')
+            plt.ylabel('Normalized Price')
+            plt.legend(title='Symbol')
+            plt.grid(True)
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'stock_performance.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating stock performance plot: {str(e)}")
+    
+    def _plot_stock_volatility(self, returns: Dict[str, float], volatility: Dict[str, float], sharpe_ratios: Dict[str, float]):
+        """
+        Create stock volatility and returns plot
+        
+        Args:
+            returns: Dictionary of average returns by symbol
+            volatility: Dictionary of volatility by symbol
+            sharpe_ratios: Dictionary of Sharpe ratios by symbol
+        """
+        try:
+            plt.figure(figsize=(10, 8))
+            
+            symbols = list(returns.keys())
+            x = [volatility[s] * 100 for s in symbols]  # Convert to percentage
+            y = [returns[s] * 100 for s in symbols]  # Convert to percentage
+            sizes = [max(20, sr * 100) for sr in [sharpe_ratios[s] for s in symbols]]
+            
+            scatter = plt.scatter(x, y, s=sizes, alpha=0.6)
+            
+            # Add labels for each point
+            for i, symbol in enumerate(symbols):
+                plt.annotate(symbol, (x[i], y[i]), xytext=(5, 5), textcoords='offset points')
+            
+            plt.axhline(y=0, color='r', linestyle='-', alpha=0.3)
+            plt.axvline(x=0, color='r', linestyle='-', alpha=0.3)
+            
+            plt.title('Risk-Return Profile of Retail Stocks')
+            plt.xlabel('Volatility (Daily Std Dev, %)')
+            plt.ylabel('Average Daily Return (%)')
+            plt.grid(True)
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'stock_volatility.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating stock volatility plot: {str(e)}")
+    
+    def analyze_supplier_performance(self, supplier_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Analyze supplier performance metrics
+        
+        Args:
+            supplier_df: DataFrame containing supplier data
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        logger.info("Analyzing supplier performance")
+        
+        if supplier_df.empty:
+            logger.warning("Supplier data is empty, skipping analysis")
+            return {}
+        
+        try:
+            # Calculate average metrics by category and tier
+            category_metrics = supplier_df.groupby('category').agg({
+                'quality_score': 'mean',
+                'on_time_delivery_rate': 'mean',
+                'cost_efficiency_score': 'mean',
+                'lead_time_days': 'mean',
+                'defect_rate': 'mean'
+            }).reset_index()
+            
+            tier_metrics = supplier_df.groupby('tier').agg({
+                'quality_score': 'mean',
+                'on_time_delivery_rate': 'mean',
+                'cost_efficiency_score': 'mean',
+                'lead_time_days': 'mean',
+                'defect_rate': 'mean'
+            }).reset_index()
+            
+            # Identify top and bottom performers
+            top_quality = supplier_df.nlargest(3, 'quality_score')[['supplier_id', 'supplier_name', 'quality_score']]
+            top_delivery = supplier_df.nlargest(3, 'on_time_delivery_rate')[['supplier_id', 'supplier_name', 'on_time_delivery_rate']]
+            top_cost = supplier_df.nlargest(3, 'cost_efficiency_score')[['supplier_id', 'supplier_name', 'cost_efficiency_score']]
+            
+            bottom_quality = supplier_df.nsmallest(3, 'quality_score')[['supplier_id', 'supplier_name', 'quality_score']]
+            bottom_delivery = supplier_df.nsmallest(3, 'on_time_delivery_rate')[['supplier_id', 'supplier_name', 'on_time_delivery_rate']]
+            bottom_cost = supplier_df.nsmallest(3, 'cost_efficiency_score')[['supplier_id', 'supplier_name', 'cost_efficiency_score']]
+            
+            # Create visualizations
+            self._plot_supplier_metrics_by_category(category_metrics)
+            self._plot_supplier_metrics_by_tier(tier_metrics)
+            self._plot_supplier_performance_quadrant(supplier_df)
+            
+            # Compile results
+            results = {
+                'category_metrics': category_metrics.to_dict(orient='records'),
+                'tier_metrics': tier_metrics.to_dict(orient='records'),
+                'top_performers': {
+                    'quality': top_quality.to_dict(orient='records'),
+                    'delivery': top_delivery.to_dict(orient='records'),
+                    'cost': top_cost.to_dict(orient='records')
+                },
+                'bottom_performers': {
+                    'quality': bottom_quality.to_dict(orient='records'),
+                    'delivery': bottom_delivery.to_dict(orient='records'),
+                    'cost': bottom_cost.to_dict(orient='records')
+                },
+                'visualization_paths': {
+                    'metrics_by_category': os.path.join(self.output_dir, 'supplier_metrics_by_category.png'),
+                    'metrics_by_tier': os.path.join(self.output_dir, 'supplier_metrics_by_tier.png'),
+                    'performance_quadrant': os.path.join(self.output_dir, 'supplier_performance_quadrant.png')
+                }
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error analyzing supplier performance: {str(e)}")
+            return {}
+    
+    def _plot_supplier_metrics_by_category(self, category_metrics: pd.DataFrame):
+        """
+        Create supplier metrics by category plot
+        
+        Args:
+            category_metrics: DataFrame containing metrics by category
+        """
+        try:
+            metrics = ['quality_score', 'on_time_delivery_rate', 'cost_efficiency_score']
+            
+            plt.figure(figsize=(12, 6))
+            
+            x = np.arange(len(category_metrics))
+            width = 0.25
+            
+            for i, metric in enumerate(metrics):
+                plt.bar(x + (i - 1) * width, category_metrics[metric], width, label=metric.replace('_', ' ').title())
+            
+            plt.xlabel('Category')
+            plt.ylabel('Score')
+            plt.title('Supplier Performance Metrics by Category')
+            plt.xticks(x, category_metrics['category'])
+            plt.legend()
+            plt.grid(True, axis='y')
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'supplier_metrics_by_category.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating supplier metrics by category plot: {str(e)}")
+    
+    def _plot_supplier_metrics_by_tier(self, tier_metrics: pd.DataFrame):
+        """
+        Create supplier metrics by tier plot
+        
+        Args:
+            tier_metrics: DataFrame containing metrics by tier
+        """
+        try:
+            metrics = ['quality_score', 'on_time_delivery_rate', 'cost_efficiency_score', 'lead_time_days']
+            
+            fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+            axes = axes.flatten()
+            
+            for i, metric in enumerate(metrics):
+                ax = axes[i]
+                ax.bar(tier_metrics['tier'], tier_metrics[metric], color=f'C{i}')
+                ax.set_xlabel('Supplier Tier')
+                ax.set_ylabel(metric.replace('_', ' ').title())
+                ax.set_title(f'{metric.replace("_", " ").title()} by Tier')
+                ax.grid(True, axis='y')
+            
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'supplier_metrics_by_tier.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating supplier metrics by tier plot: {str(e)}")
+    
+    def _plot_supplier_performance_quadrant(self, supplier_df: pd.DataFrame):
+        """
+        Create supplier performance quadrant plot
+        
+        Args:
+            supplier_df: DataFrame containing supplier data
+        """
+        try:
+            plt.figure(figsize=(10, 8))
+            
+            # Use quality and delivery as the two main dimensions
+            x = supplier_df['quality_score']
+            y = supplier_df['on_time_delivery_rate']
+            
+            # Use cost efficiency for point size
+            sizes = supplier_df['cost_efficiency_score'] * 100
+            
+            # Use category for color
+            categories = supplier_df['category'].unique()
+            colors = plt.cm.viridis(np.linspace(0, 1, len(categories)))
+            category_color_map = dict(zip(categories, colors))
+            
+            point_colors = [category_color_map[cat] for cat in supplier_df['category']]
+            
+            scatter = plt.scatter(x, y, s=sizes, c=point_colors, alpha=0.6)
+            
+            # Add labels for each point
+            for i, supplier_id in enumerate(supplier_df['supplier_id']):
+                plt.annotate(supplier_id, (x.iloc[i], y.iloc[i]), xytext=(5, 5), textcoords='offset points')
+            
+            # Add quadrant lines
+            plt.axhline(y=0.9, color='r', linestyle='--', alpha=0.3)
+            plt.axvline(x=0.9, color='r', linestyle='--', alpha=0.3)
+            
+            # Add quadrant labels
+            plt.text(0.95, 0.95, 'Top Performers', ha='right', va='top', transform=plt.gca().transAxes)
+            plt.text(0.05, 0.95, 'Quality Issues', ha='left', va='top', transform=plt.gca().transAxes)
+            plt.text(0.95, 0.05, 'Delivery Issues', ha='right', va='bottom', transform=plt.gca().transAxes)
+            plt.text(0.05, 0.05, 'Problematic Suppliers', ha='left', va='bottom', transform=plt.gca().transAxes)
+            
+            # Create legend for categories
+            legend_elements = [plt.Line2D([0], [0], marker='o', color='w', markerfacecolor=color, markersize=10, label=category)
+                              for category, color in category_color_map.items()]
+            plt.legend(handles=legend_elements, title='Category', loc='center left', bbox_to_anchor=(1, 0.5))
+            
+            plt.title('Supplier Performance Quadrant')
+            plt.xlabel('Quality Score')
+            plt.ylabel('On-Time Delivery Rate')
+            plt.xlim(0.7, 1.0)
+            plt.ylim(0.7, 1.0)
+            plt.grid(True)
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'supplier_performance_quadrant.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating supplier performance quadrant plot: {str(e)}")
+    
+    def analyze_shipping_efficiency(self, shipping_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Analyze shipping efficiency metrics
+        
+        Args:
+            shipping_df: DataFrame containing shipping data
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        logger.info("Analyzing shipping efficiency")
+        
+        if shipping_df.empty:
+            logger.warning("Shipping data is empty, skipping analysis")
+            return {}
+        
+        try:
+            # Calculate average metrics by origin and destination
+            origin_metrics = shipping_df.groupby('origin').agg({
+                'transit_time_days': 'mean',
+                'cost_per_kg_usd': 'mean',
+                'on_time_delivery_rate': 'mean',
+                'carbon_footprint': 'mean'
+            }).reset_index()
+            
+            destination_metrics = shipping_df.groupby('destination').agg({
+                'transit_time_days': 'mean',
+                'cost_per_kg_usd': 'mean',
+                'on_time_delivery_rate': 'mean',
+                'carbon_footprint': 'mean'
+            }).reset_index()
+            
+            # Identify optimal and problematic routes
+            optimal_routes = shipping_df.nsmallest(3, 'cost_per_kg_usd')[['origin', 'destination', 'transit_time_days', 'cost_per_kg_usd', 'on_time_delivery_rate']]
+            fastest_routes = shipping_df.nsmallest(3, 'transit_time_days')[['origin', 'destination', 'transit_time_days', 'cost_per_kg_usd', 'on_time_delivery_rate']]
+            most_reliable_routes = shipping_df.nlargest(3, 'on_time_delivery_rate')[['origin', 'destination', 'transit_time_days', 'cost_per_kg_usd', 'on_time_delivery_rate']]
+            
+            problematic_routes = shipping_df.nsmallest(3, 'on_time_delivery_rate')[['origin', 'destination', 'transit_time_days', 'cost_per_kg_usd', 'on_time_delivery_rate']]
+            
+            # Create visualizations
+            self._plot_shipping_metrics(shipping_df)
+            self._plot_shipping_route_comparison(shipping_df)
+            
+            # Compile results
+            results = {
+                'origin_metrics': origin_metrics.to_dict(orient='records'),
+                'destination_metrics': destination_metrics.to_dict(orient='records'),
+                'optimal_routes': {
+                    'cost': optimal_routes.to_dict(orient='records'),
+                    'speed': fastest_routes.to_dict(orient='records'),
+                    'reliability': most_reliable_routes.to_dict(orient='records')
+                },
+                'problematic_routes': problematic_routes.to_dict(orient='records'),
+                'visualization_paths': {
+                    'shipping_metrics': os.path.join(self.output_dir, 'shipping_metrics.png'),
+                    'route_comparison': os.path.join(self.output_dir, 'shipping_route_comparison.png')
+                }
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error analyzing shipping efficiency: {str(e)}")
+            return {}
+    
+    def _plot_shipping_metrics(self, shipping_df: pd.DataFrame):
+        """
+        Create shipping metrics plot
+        
+        Args:
+            shipping_df: DataFrame containing shipping data
+        """
+        try:
+            # Create a unique identifier for each route
+            shipping_df['route'] = shipping_df['origin'] + ' to ' + shipping_df['destination']
+            
+            fig, axes = plt.subplots(3, 1, figsize=(12, 15))
+            
+            # Plot transit time
+            axes[0].bar(shipping_df['route'], shipping_df['transit_time_days'], color='skyblue')
+            axes[0].set_xlabel('Route')
+            axes[0].set_ylabel('Transit Time (days)')
+            axes[0].set_title('Transit Time by Route')
+            axes[0].tick_params(axis='x', rotation=45)
+            axes[0].grid(True, axis='y')
+            
+            # Plot cost per kg
+            axes[1].bar(shipping_df['route'], shipping_df['cost_per_kg_usd'], color='salmon')
+            axes[1].set_xlabel('Route')
+            axes[1].set_ylabel('Cost per kg (USD)')
+            axes[1].set_title('Shipping Cost by Route')
+            axes[1].tick_params(axis='x', rotation=45)
+            axes[1].grid(True, axis='y')
+            
+            # Plot on-time delivery rate
+            axes[2].bar(shipping_df['route'], shipping_df['on_time_delivery_rate'], color='lightgreen')
+            axes[2].set_xlabel('Route')
+            axes[2].set_ylabel('On-Time Delivery Rate')
+            axes[2].set_title('Reliability by Route')
+            axes[2].tick_params(axis='x', rotation=45)
+            axes[2].grid(True, axis='y')
+            
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'shipping_metrics.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating shipping metrics plot: {str(e)}")
+    
+    def _plot_shipping_route_comparison(self, shipping_df: pd.DataFrame):
+        """
+        Create shipping route comparison plot
+        
+        Args:
+            shipping_df: DataFrame containing shipping data
+        """
+        try:
+            # Create a unique identifier for each route
+            shipping_df['route'] = shipping_df['origin'] + ' to ' + shipping_df['destination']
+            
+            plt.figure(figsize=(10, 8))
+            
+            # Use transit time and cost as the two main dimensions
+            x = shipping_df['transit_time_days']
+            y = shipping_df['cost_per_kg_usd']
+            
+            # Use on-time delivery rate for point size
+            sizes = shipping_df['on_time_delivery_rate'] * 200
+            
+            # Use carbon footprint for color intensity
+            colors = plt.cm.YlOrRd(shipping_df['carbon_footprint'] / shipping_df['carbon_footprint'].max())
+            
+            scatter = plt.scatter(x, y, s=sizes, c=colors, alpha=0.7)
+            
+            # Add labels for each point
+            for i, route in enumerate(shipping_df['route']):
+                plt.annotate(route, (x.iloc[i], y.iloc[i]), xytext=(5, 5), textcoords='offset points')
+            
+            plt.title('Shipping Route Comparison')
+            plt.xlabel('Transit Time (days)')
+            plt.ylabel('Cost per kg (USD)')
+            plt.grid(True)
+            
+            # Add a colorbar for carbon footprint
+            cbar = plt.colorbar(plt.cm.ScalarMappable(cmap='YlOrRd', norm=plt.Normalize(0, shipping_df['carbon_footprint'].max())))
+            cbar.set_label('Carbon Footprint (kg CO2 per ton)')
+            
+            # Add a legend for point size
+            for rate in [0.8, 0.9, 1.0]:
+                plt.scatter([], [], s=rate*200, c='gray', alpha=0.7, label=f'On-Time Rate: {rate:.1f}')
+            plt.legend(scatterpoints=1, frameon=False, labelspacing=1)
+            
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'shipping_route_comparison.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating shipping route comparison plot: {str(e)}")
+    
+    def analyze_economic_impact(self, economic_df: pd.DataFrame, sales_df: pd.DataFrame) -> Dict[str, Any]:
+        """
+        Analyze impact of economic indicators on sales
+        
+        Args:
+            economic_df: DataFrame containing economic data
+            sales_df: DataFrame containing sales data
+            
+        Returns:
+            Dictionary containing analysis results
+        """
+        logger.info("Analyzing economic impact on sales")
+        
+        if economic_df.empty or sales_df.empty:
+            logger.warning("Economic or sales data is empty, skipping analysis")
+            return {}
+        
+        try:
+            # Ensure date columns are datetime
+            economic_df['date'] = pd.to_datetime(economic_df['date'])
+            sales_df['date'] = pd.to_datetime(sales_df['date'])
+            
+            # Aggregate sales by month
+            sales_df['year_month'] = sales_df['date'].dt.strftime('%Y-%m')
+            monthly_sales = sales_df.groupby(['category', 'year_month'])['sales'].sum().reset_index()
+            
+            # Aggregate economic indicators by month
+            economic_df['year_month'] = economic_df['date'].dt.strftime('%Y-%m')
+            monthly_indicators = economic_df.pivot_table(
+                index=['country', 'year_month'],
+                columns='indicator',
+                values='value',
+                aggfunc='mean'
+            ).reset_index()
+            
+            # Focus on US data for simplicity
+            us_indicators = monthly_indicators[monthly_indicators['country'] == 'USA'].copy()
+            
+            # Merge sales and economic data
+            merged_data = {}
+            correlations = {}
+            
+            for category in sales_df['category'].unique():
+                category_sales = monthly_sales[monthly_sales['category'] == category].copy()
+                
+                if not category_sales.empty and not us_indicators.empty:
+                    # Merge on year_month
+                    merged = pd.merge(category_sales, us_indicators, on='year_month', how='inner')
+                    
+                    if not merged.empty:
+                        merged_data[category] = merged
+                        
+                        # Calculate correlations between sales and economic indicators
+                        corr_data = {}
+                        for indicator in economic_df['indicator'].unique():
+                            if indicator in merged.columns:
+                                correlation = merged['sales'].corr(merged[indicator])
+                                corr_data[indicator] = correlation
+                        
+                        correlations[category] = corr_data
+            
+            # Create visualizations
+            self._plot_economic_correlations(correlations)
+            self._plot_sales_vs_indicators(merged_data)
+            
+            # Compile results
+            results = {
+                'correlations': correlations,
+                'visualization_paths': {
+                    'economic_correlations': os.path.join(self.output_dir, 'economic_correlations.png'),
+                    'sales_vs_indicators': os.path.join(self.output_dir, 'sales_vs_indicators.png')
+                }
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error analyzing economic impact: {str(e)}")
+            return {}
+    
+    def _plot_economic_correlations(self, correlations: Dict[str, Dict[str, float]]):
+        """
+        Create economic correlations plot
+        
+        Args:
+            correlations: Dictionary of correlations by category and indicator
+        """
+        try:
+            # Convert correlations to DataFrame
+            corr_data = []
+            for category, indicators in correlations.items():
+                for indicator, correlation in indicators.items():
+                    corr_data.append({
+                        'category': category,
+                        'indicator': indicator,
+                        'correlation': correlation
+                    })
+            
+            corr_df = pd.DataFrame(corr_data)
+            
+            if not corr_df.empty:
+                plt.figure(figsize=(10, 8))
+                
+                # Create a pivot table for the heatmap
+                pivot_df = corr_df.pivot(index='category', columns='indicator', values='correlation')
+                
+                # Create heatmap
+                sns.heatmap(pivot_df, annot=True, cmap='coolwarm', vmin=-1, vmax=1, center=0)
+                
+                plt.title('Correlation between Sales and Economic Indicators')
+                plt.tight_layout()
+                
+                # Save the figure
+                plt.savefig(os.path.join(self.output_dir, 'economic_correlations.png'), dpi=300)
+                plt.close()
+                
+        except Exception as e:
+            logger.error(f"Error creating economic correlations plot: {str(e)}")
+    
+    def _plot_sales_vs_indicators(self, merged_data: Dict[str, pd.DataFrame]):
+        """
+        Create sales vs economic indicators plot
+        
+        Args:
+            merged_data: Dictionary of merged sales and economic data by category
+        """
+        try:
+            if not merged_data:
+                return
+            
+            # Select a few key indicators
+            key_indicators = ['consumer_confidence', 'unemployment', 'inflation']
+            
+            # Create subplots for each category and indicator
+            categories = list(merged_data.keys())
+            
+            fig, axes = plt.subplots(len(categories), len(key_indicators), figsize=(15, 10))
+            
+            # Handle case with only one category
+            if len(categories) == 1:
+                axes = axes.reshape(1, -1)
+            
+            for i, category in enumerate(categories):
+                data = merged_data[category]
+                
+                for j, indicator in enumerate(key_indicators):
+                    if indicator in data.columns:
+                        ax = axes[i, j]
+                        
+                        # Plot sales and indicator
+                        ax1 = ax
+                        line1 = ax1.plot(pd.to_datetime(data['year_month']), data['sales'], 'b-', label='Sales')
+                        ax1.set_ylabel('Sales', color='b')
+                        ax1.tick_params(axis='y', labelcolor='b')
+                        
+                        ax2 = ax1.twinx()
+                        line2 = ax2.plot(pd.to_datetime(data['year_month']), data[indicator], 'r-', label=indicator)
+                        ax2.set_ylabel(indicator.replace('_', ' ').title(), color='r')
+                        ax2.tick_params(axis='y', labelcolor='r')
+                        
+                        # Set title only for top row
+                        if i == 0:
+                            ax.set_title(indicator.replace('_', ' ').title())
+                        
+                        # Set category label only for leftmost column
+                        if j == 0:
+                            ax.text(-0.1, 0.5, category, transform=ax.transAxes, rotation=90, va='center', ha='right')
+                        
+                        # Format x-axis
+                        if i == len(categories) - 1:
+                            ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter('%Y-%m'))
+                            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45)
+                        else:
+                            ax.set_xticklabels([])
+            
+            plt.tight_layout()
+            
+            # Save the figure
+            plt.savefig(os.path.join(self.output_dir, 'sales_vs_indicators.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating sales vs indicators plot: {str(e)}")
+    
+    def generate_inventory_optimization_insights(self, data: Dict[str, pd.DataFrame]) -> Dict[str, Any]:
+        """
+        Generate insights for inventory optimization
+        
+        Args:
+            data: Dictionary of DataFrames containing all data types
+            
+        Returns:
+            Dictionary containing insights
+        """
+        logger.info("Generating inventory optimization insights")
+        
+        insights = {}
+        
+        try:
+            # Analyze sales trends
+            if 'sales_data' in data and not data['sales_data'].empty:
+                sales_insights = self.analyze_sales_trends(data['sales_data'])
+                insights['sales_trends'] = sales_insights
+            
+            # Analyze stock performance
+            if 'stock_data' in data and not data['stock_data'].empty:
+                stock_insights = self.analyze_stock_performance(data['stock_data'])
+                insights['stock_performance'] = stock_insights
+            
+            # Analyze supplier performance
+            if 'supplier_data' in data and not data['supplier_data'].empty:
+                supplier_insights = self.analyze_supplier_performance(data['supplier_data'])
+                insights['supplier_performance'] = supplier_insights
+            
+            # Analyze shipping efficiency
+            if 'shipping_data' in data and not data['shipping_data'].empty:
+                shipping_insights = self.analyze_shipping_efficiency(data['shipping_data'])
+                insights['shipping_efficiency'] = shipping_insights
+            
+            # Analyze economic impact
+            if 'economic_data' in data and 'sales_data' in data and not data['economic_data'].empty and not data['sales_data'].empty:
+                economic_insights = self.analyze_economic_impact(data['economic_data'], data['sales_data'])
+                insights['economic_impact'] = economic_insights
+            
+            # Generate key recommendations
+            recommendations = self._generate_recommendations(insights)
+            insights['recommendations'] = recommendations
+            
+            # Save insights to file
+            self._save_insights(insights)
+            
+            return insights
+            
+        except Exception as e:
+            logger.error(f"Error generating inventory optimization insights: {str(e)}")
+            return {}
+    
+    def _generate_recommendations(self, insights: Dict[str, Any]) -> List[Dict[str, str]]:
+        """
+        Generate recommendations based on insights
+        
+        Args:
+            insights: Dictionary containing analysis insights
+            
+        Returns:
+            List of recommendation dictionaries
+        """
+        recommendations = []
+        
+        try:
+            # Sales-based recommendations
+            if 'sales_trends' in insights:
+                sales_trends = insights['sales_trends']
+                
+                # Identify growing categories
+                if 'category_growth_rates' in sales_trends:
+                    growth_rates = sales_trends['category_growth_rates']
+                    for category, growth in growth_rates.items():
+                        if growth > 0.1:  # More than 10% growth
+                            recommendations.append({
+                                'area': 'Inventory Planning',
+                                'recommendation': f'Increase inventory levels for {category} products due to strong growth trend ({growth:.1%}).',
+                                'priority': 'High'
+                            })
+                        elif growth < -0.1:  # More than 10% decline
+                            recommendations.append({
+                                'area': 'Inventory Planning',
+                                'recommendation': f'Reduce inventory levels for {category} products due to declining trend ({growth:.1%}).',
+                                'priority': 'High'
+                            })
+                
+                # Seasonal pattern recommendations
+                if 'seasonal_patterns' in sales_trends:
+                    seasonal_patterns = sales_trends['seasonal_patterns']
+                    for category, pattern in seasonal_patterns.items():
+                        if pattern.get('seasonality_strength', 0) > 0.5:
+                            recommendations.append({
+                                'area': 'Seasonal Planning',
+                                'recommendation': f'Adjust inventory levels for {category} products based on weekly seasonality. Peak day: {pattern.get("peak_day", "Unknown")}.',
+                                'priority': 'Medium'
+                            })
+            
+            # Supplier-based recommendations
+            if 'supplier_performance' in insights:
+                supplier_insights = insights['supplier_performance']
+                
+                # Recommendations for problematic suppliers
+                if 'bottom_performers' in supplier_insights:
+                    bottom_quality = supplier_insights['bottom_performers'].get('quality', [])
+                    bottom_delivery = supplier_insights['bottom_performers'].get('delivery', [])
+                    
+                    for supplier in bottom_quality:
+                        recommendations.append({
+                            'area': 'Supplier Management',
+                            'recommendation': f'Implement quality improvement program with {supplier.get("supplier_name", "Unknown")} (Quality score: {supplier.get("quality_score", 0):.2f}).',
+                            'priority': 'High'
+                        })
+                    
+                    for supplier in bottom_delivery:
+                        recommendations.append({
+                            'area': 'Supplier Management',
+                            'recommendation': f'Increase safety stock for products from {supplier.get("supplier_name", "Unknown")} due to low on-time delivery rate ({supplier.get("on_time_delivery_rate", 0):.2f}).',
+                            'priority': 'High'
+                        })
+            
+            # Shipping-based recommendations
+            if 'shipping_efficiency' in insights:
+                shipping_insights = insights['shipping_efficiency']
+                
+                # Recommendations for problematic routes
+                if 'problematic_routes' in shipping_insights:
+                    for route in shipping_insights['problematic_routes']:
+                        recommendations.append({
+                            'area': 'Logistics',
+                            'recommendation': f'Increase lead time buffer for shipments from {route.get("origin", "Unknown")} to {route.get("destination", "Unknown")} due to low reliability ({route.get("on_time_delivery_rate", 0):.2f}).',
+                            'priority': 'Medium'
+                        })
+                
+                # Recommendations for optimal routes
+                if 'optimal_routes' in shipping_insights and 'cost' in shipping_insights['optimal_routes']:
+                    for route in shipping_insights['optimal_routes']['cost']:
+                        recommendations.append({
+                            'area': 'Cost Optimization',
+                            'recommendation': f'Prioritize {route.get("origin", "Unknown")} to {route.get("destination", "Unknown")} route for cost-sensitive shipments (${route.get("cost_per_kg_usd", 0):.2f}/kg).',
+                            'priority': 'Medium'
+                        })
+            
+            # Economic impact recommendations
+            if 'economic_impact' in insights:
+                economic_insights = insights['economic_impact']
+                
+                if 'correlations' in economic_insights:
+                    correlations = economic_insights['correlations']
+                    for category, indicators in correlations.items():
+                        for indicator, correlation in indicators.items():
+                            if abs(correlation) > 0.7:  # Strong correlation
+                                direction = "positively" if correlation > 0 else "negatively"
+                                recommendations.append({
+                                    'area': 'Economic Planning',
+                                    'recommendation': f'Monitor {indicator.replace("_", " ")} closely as it is {direction} correlated with {category} sales (correlation: {correlation:.2f}).',
+                                    'priority': 'Medium'
+                                })
+            
+            return recommendations
+            
+        except Exception as e:
+            logger.error(f"Error generating recommendations: {str(e)}")
+            return []
+    
+    def _save_insights(self, insights: Dict[str, Any]):
+        """
+        Save insights to file
+        
+        Args:
+            insights: Dictionary containing analysis insights
+        """
+        try:
+            # Save as JSON
+            with open(os.path.join(self.output_dir, 'inventory_optimization_insights.json'), 'w') as f:
+                json.dump(insights, f, indent=2)
+            
+            logger.info(f"Saved insights to {os.path.join(self.output_dir, 'inventory_optimization_insights.json')}")
+            
+            # Generate a summary report
+            self._generate_summary_report(insights)
+            
+        except Exception as e:
+            logger.error(f"Error saving insights: {str(e)}")
+    
+    def _generate_summary_report(self, insights: Dict[str, Any]):
+        """
+        Generate a summary report from insights
+        
+        Args:
+            insights: Dictionary containing analysis insights
+        """
+        try:
+            report = []
+            
+            report.append("# Inventory Optimization Insights Summary")
+            report.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            # Add recommendations section
+            if 'recommendations' in insights:
+                report.append("## Key Recommendations")
+                
+                # Group recommendations by area
+                area_recommendations = {}
+                for rec in insights['recommendations']:
+                    area = rec.get('area', 'Other')
+                    if area not in area_recommendations:
+                        area_recommendations[area] = []
+                    area_recommendations[area].append(rec)
+                
+                for area, recs in area_recommendations.items():
+                    report.append(f"\n### {area}")
+                    for rec in recs:
+                        priority = rec.get('priority', 'Medium')
+                        report.append(f"- **{priority}**: {rec.get('recommendation', '')}")
+            
+            # Add sales trends section
+            if 'sales_trends' in insights:
+                report.append("\n## Sales Trends")
+                
+                sales_trends = insights['sales_trends']
+                
+                if 'total_sales_by_category' in sales_trends:
+                    report.append("\n### Total Sales by Category")
+                    for category, sales in sales_trends['total_sales_by_category'].items():
+                        report.append(f"- {category}: {sales:,.0f}")
+                
+                if 'category_growth_rates' in sales_trends:
+                    report.append("\n### Category Growth Rates")
+                    for category, growth in sales_trends['category_growth_rates'].items():
+                        report.append(f"- {category}: {growth:.1%}")
+                
+                if 'seasonal_patterns' in sales_trends:
+                    report.append("\n### Seasonal Patterns")
+                    for category, pattern in sales_trends['seasonal_patterns'].items():
+                        strength = pattern.get('seasonality_strength', 0)
+                        peak_day = pattern.get('peak_day', 'Unknown')
+                        trough_day = pattern.get('trough_day', 'Unknown')
+                        report.append(f"- {category}: Seasonality Strength = {strength:.2f}, Peak Day = {peak_day}, Trough Day = {trough_day}")
+                
+                if 'visualization_paths' in sales_trends:
+                    report.append("\n### Sales Visualizations")
+                    for name, path in sales_trends['visualization_paths'].items():
+                        report.append(f"- [{name.replace('_', ' ').title()}]({path})")
+            
+            # Add supplier performance section
+            if 'supplier_performance' in insights:
+                report.append("\n## Supplier Performance")
+                
+                supplier_insights = insights['supplier_performance']
+                
+                if 'top_performers' in supplier_insights and 'quality' in supplier_insights['top_performers']:
+                    report.append("\n### Top Quality Suppliers")
+                    for supplier in supplier_insights['top_performers']['quality']:
+                        report.append(f"- {supplier.get('supplier_name', 'Unknown')}: {supplier.get('quality_score', 0):.2f}")
+                
+                if 'bottom_performers' in supplier_insights and 'delivery' in supplier_insights['bottom_performers']:
+                    report.append("\n### Suppliers with Delivery Issues")
+                    for supplier in supplier_insights['bottom_performers']['delivery']:
+                        report.append(f"- {supplier.get('supplier_name', 'Unknown')}: {supplier.get('on_time_delivery_rate', 0):.2f}")
+                
+                if 'visualization_paths' in supplier_insights:
+                    report.append("\n### Supplier Visualizations")
+                    for name, path in supplier_insights['visualization_paths'].items():
+                        report.append(f"- [{name.replace('_', ' ').title()}]({path})")
+            
+            # Add shipping efficiency section
+            if 'shipping_efficiency' in insights:
+                report.append("\n## Shipping Efficiency")
+                
+                shipping_insights = insights['shipping_efficiency']
+                
+                if 'optimal_routes' in shipping_insights and 'cost' in shipping_insights['optimal_routes']:
+                    report.append("\n### Most Cost-Effective Routes")
+                    for route in shipping_insights['optimal_routes']['cost']:
+                        report.append(f"- {route.get('origin', 'Unknown')} to {route.get('destination', 'Unknown')}: ${route.get('cost_per_kg_usd', 0):.2f}/kg")
+                
+                if 'problematic_routes' in shipping_insights:
+                    report.append("\n### Problematic Routes")
+                    for route in shipping_insights['problematic_routes']:
+                        report.append(f"- {route.get('origin', 'Unknown')} to {route.get('destination', 'Unknown')}: {route.get('on_time_delivery_rate', 0):.2f} on-time rate")
+                
+                if 'visualization_paths' in shipping_insights:
+                    report.append("\n### Shipping Visualizations")
+                    for name, path in shipping_insights['visualization_paths'].items():
+                        report.append(f"- [{name.replace('_', ' ').title()}]({path})")
+            
+            # Write report to file
+            with open(os.path.join(self.output_dir, 'inventory_optimization_summary.md'), 'w') as f:
+                f.write('\n'.join(report))
+            
+            logger.info(f"Generated summary report at {os.path.join(self.output_dir, 'inventory_optimization_summary.md')}")
+            
+        except Exception as e:
+            logger.error(f"Error generating summary report: {str(e)}")
+
+
+class EDAAgent:
+    """
+    Main agent class for exploratory data analysis
+    
+    This agent coordinates the loading, analysis, and insight generation
+    from retail inventory data.
+    """
+    
+    def __init__(self, db_path: str = "retail_data.db", output_dir: str = "analysis_results"):
+        """
+        Initialize the EDA Agent
+        
+        Args:
+            db_path: Path to the SQLite database file
+            output_dir: Directory to save analysis results
+        """
+        self.db_path = db_path
+        self.output_dir = output_dir
+        
+        # Initialize data loader
+        self.data_loader = DataLoader(db_path=db_path)
+        
+        # Initialize data analyzer
+        self.data_analyzer = DataAnalyzer(output_dir=output_dir)
+        
+        logger.info("EDA Agent initialized")
+    
+    def run_analysis(self) -> Dict[str, Any]:
+        """
+        Run the complete analysis pipeline
+        
+        Returns:
+            Dictionary containing analysis results and insights
+        """
+        logger.info("Starting analysis pipeline")
+        
+        try:
+            # Load all data
+            data = self.data_loader.load_all_data()
+            
+            # Check if data is available
+            if all(df.empty for df in data.values()):
+                logger.warning("No data available for analysis")
+                return {"error": "No data available for analysis"}
+            
+            # Generate insights
+            insights = self.data_analyzer.generate_inventory_optimization_insights(data)
+            
+            logger.info("Analysis pipeline completed successfully")
+            
+            return insights
+            
+        except Exception as e:
+            logger.error(f"Error in analysis pipeline: {str(e)}")
+            return {"error": str(e)}
+    
+    def get_recommendations(self) -> List[Dict[str, str]]:
+        """
+        Get inventory optimization recommendations
+        
+        Returns:
+            List of recommendation dictionaries
+        """
+        try:
+            # Run analysis if not already done
+            insights = self.run_analysis()
+            
+            # Extract recommendations
+            if 'recommendations' in insights:
+                return insights['recommendations']
+            else:
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting recommendations: {str(e)}")
+            return []
+    
+    def get_summary_report_path(self) -> str:
+        """
+        Get the path to the summary report
+        
+        Returns:
+            Path to the summary report file
+        """
+        return os.path.join(self.output_dir, 'inventory_optimization_summary.md')
+    
+    def get_visualization_paths(self) -> Dict[str, str]:
+        """
+        Get paths to all visualizations
+        
+        Returns:
+            Dictionary of visualization paths
+        """
+        try:
+            visualization_paths = {}
+            
+            # Run analysis if not already done
+            insights = self.run_analysis()
+            
+            # Extract visualization paths from each analysis area
+            for area, results in insights.items():
+                if isinstance(results, dict) and 'visualization_paths' in results:
+                    for name, path in results['visualization_paths'].items():
+                        visualization_paths[f"{area}_{name}"] = path
+            
+            return visualization_paths
+                
+        except Exception as e:
+            logger.error(f"Error getting visualization paths: {str(e)}")
+            return {}
+
+
+def main():
+    """Main function to run the EDA Agent"""
+    try:
+        # Initialize the agent
+        agent = EDAAgent()
+        
+        # Run analysis
+        insights = agent.run_analysis()
+        
+        # Print summary of insights
+        if 'recommendations' in insights:
+            print("\nTop Recommendations:")
+            for i, rec in enumerate(insights['recommendations'][:5], 1):
+                print(f"{i}. [{rec.get('priority', 'Medium')}] {rec.get('recommendation', '')}")
+        
+        print(f"\nAnalysis completed successfully. Results saved to {agent.output_dir}")
+        print(f"Summary report: {agent.get_summary_report_path()}")
+        
+    except Exception as e:
+        logger.error(f"Error in main function: {str(e)}")
+        print(f"Error: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
