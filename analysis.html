@@ -1,0 +1,240 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12 mb-4">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">
+                    <i class="fas fa-chart-line me-2"></i>
+                    Exploratory Data Analysis
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row mb-4">
+                    <div class="col-md-12">
+                        <ul class="nav nav-tabs" id="analysisTab" role="tablist">
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link active" id="sales-tab" data-bs-toggle="tab" data-bs-target="#sales" type="button" role="tab" aria-controls="sales" aria-selected="true">
+                                    <i class="fas fa-chart-bar me-1"></i> Sales Analysis
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="supplier-tab" data-bs-toggle="tab" data-bs-target="#supplier" type="button" role="tab" aria-controls="supplier" aria-selected="false">
+                                    <i class="fas fa-truck me-1"></i> Supplier Analysis
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="shipping-tab" data-bs-toggle="tab" data-bs-target="#shipping" type="button" role="tab" aria-controls="shipping" aria-selected="false">
+                                    <i class="fas fa-shipping-fast me-1"></i> Shipping Analysis
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="economic-tab" data-bs-toggle="tab" data-bs-target="#economic" type="button" role="tab" aria-controls="economic" aria-selected="false">
+                                    <i class="fas fa-globe me-1"></i> Economic Analysis
+                                </button>
+                            </li>
+                        </ul>
+                        <div class="tab-content p-3 border border-top-0 rounded-bottom" id="analysisTabContent">
+                            <div class="tab-pane fade show active" id="sales" role="tabpanel" aria-labelledby="sales-tab">
+                                <div class="row">
+                                    <div class="col-md-8">
+                                        <div class="analysis-visualization mb-3">
+                                            <img src="/output/analysis_results/sales_by_category.png" alt="Sales by Category" class="img-fluid rounded">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="card h-100">
+                                            <div class="card-header bg-light">
+                                                <h6 class="mb-0">Key Insights</h6>
+                                            </div>
+                                            <div class="card-body">
+                                                <ul class="list-group list-group-flush">
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Electronics category shows highest total sales ($5,031.55)
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Sales are generally higher on weekends
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Store S002 consistently outperforms Store S001
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="row mt-4">
+                                    <div class="col-md-12">
+                                        <div class="analysis-visualization">
+                                            <img src="/output/analysis_results/sales_trend.png" alt="Sales Trend" class="img-fluid rounded">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="supplier" role="tabpanel" aria-labelledby="supplier-tab">
+                                <div class="row">
+                                    <div class="col-md-8">
+                                        <div class="analysis-visualization mb-3">
+                                            <img src="/output/analysis_results/supplier_reliability.png" alt="Supplier Reliability" class="img-fluid rounded">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="card h-100">
+                                            <div class="card-header bg-light">
+                                                <h6 class="mb-0">Key Insights</h6>
+                                            </div>
+                                            <div class="card-body">
+                                                <ul class="list-group list-group-flush">
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Supplier SUP002 has highest reliability score (0.98)
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Supplier SUP001 offers most competitive pricing for electronics
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Lead times vary significantly between suppliers (2-7 days)
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="shipping" role="tabpanel" aria-labelledby="shipping-tab">
+                                <div class="row">
+                                    <div class="col-md-8">
+                                        <div class="analysis-visualization mb-3">
+                                            <img src="/output/analysis_results/transit_time_by_carrier.png" alt="Transit Time by Carrier" class="img-fluid rounded">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="card h-100">
+                                            <div class="card-header bg-light">
+                                                <h6 class="mb-0">Key Insights</h6>
+                                            </div>
+                                            <div class="card-body">
+                                                <ul class="list-group list-group-flush">
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Carrier Y has shortest average transit time (1.5 days)
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Carrier Z handles longest routes with higher costs
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Direct warehouse-to-store shipping is most efficient
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="tab-pane fade" id="economic" role="tabpanel" aria-labelledby="economic-tab">
+                                <div class="row">
+                                    <div class="col-md-8">
+                                        <div class="analysis-visualization mb-3">
+                                            <img src="/output/analysis_results/economic_indicators.png" alt="Economic Indicators" class="img-fluid rounded">
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="card h-100">
+                                            <div class="card-header bg-light">
+                                                <h6 class="mb-0">Key Insights</h6>
+                                            </div>
+                                            <div class="card-body">
+                                                <ul class="list-group list-group-flush">
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Consumer confidence shows slight negative correlation with sales (-0.3)
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Inflation rate has minimal impact on short-term sales patterns
+                                                    </li>
+                                                    <li class="list-group-item">
+                                                        <i class="fas fa-check-circle text-success me-2"></i>
+                                                        Economic indicators provide valuable context for forecasting
+                                                    </li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-12 mb-4">
+        <div class="card">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0">
+                    <i class="fas fa-lightbulb me-2"></i>
+                    Analysis Recommendations
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="recommendation-item p-3 mb-3 border rounded">
+                            <div class="d-flex align-items-center">
+                                <div class="recommendation-icon me-3 text-primary">
+                                    <i class="fas fa-chart-line fa-2x"></i>
+                                </div>
+                                <div class="recommendation-content">
+                                    <h6 class="mb-1">Inventory Optimization</h6>
+                                    <p class="mb-0">Increase stock levels for electronics before weekends to meet peak demand.</p>
+                                    <div class="mt-2">
+                                        <span class="badge bg-danger">High Priority</span>
+                                        <span class="badge bg-info ms-1">Sales-Driven</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="recommendation-item p-3 mb-3 border rounded">
+                            <div class="d-flex align-items-center">
+                                <div class="recommendation-icon me-3 text-success">
+                                    <i class="fas fa-truck fa-2x"></i>
+                                </div>
+                                <div class="recommendation-content">
+                                    <h6 class="mb-1">Supplier Selection</h6>
+                                    <p class="mb-0">Prioritize SUP002 for critical products due to high reliability score.</p>
+                                    <div class="mt-2">
+                                        <span class="badge bg-warning">Medium Priority</span>
+                                        <span class="badge bg-info ms-1">Reliability-Driven</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="recommendation-item p-3 mb-3 border rounded">
+                            <div class="d-flex align-items-center">
+                                <div class="recommendation-icon me-3 text-warning">
+                                    <i class="fas fa-shipping-fast fa-2x"></i>
+                                </div>
+                                <div class="recommendation-content">
+                                    <h6 class="mb-1">Shipping Strategy</h6>
+                                    <p class="mb-0">Utilize Carrier Y for time-sensitive deliveries to reduce transit time.</p>
+                                    <div class="mt-2">
+           
+(Content truncated due to size limit. Use line ranges to read in chunks)

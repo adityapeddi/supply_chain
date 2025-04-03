@@ -1,0 +1,203 @@
+/* Custom styles for Retail Inventory Optimization System */
+
+/* General Styles */
+body {
+    font-family: 'Roboto', sans-serif;
+    background-color: #f8f9fa;
+}
+
+.container-fluid {
+    padding: 0 20px;
+}
+
+/* Navigation */
+.navbar-brand {
+    font-weight: 700;
+}
+
+/* Cards */
+.card {
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+    margin-bottom: 1.5rem;
+}
+
+.card-header {
+    font-weight: 600;
+}
+
+/* Status Indicators */
+.status-indicators .badge {
+    min-width: 80px;
+}
+
+/* Timeline Styles */
+.status-timeline {
+    position: relative;
+    padding-left: 30px;
+    margin-top: 20px;
+}
+
+.timeline-item {
+    position: relative;
+    margin-bottom: 20px;
+}
+
+.timeline-marker {
+    position: absolute;
+    left: -30px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    text-align: center;
+    line-height: 20px;
+    color: white;
+    font-size: 10px;
+}
+
+.timeline-content {
+    padding-left: 10px;
+}
+
+/* Agent Diagram */
+.agent-diagram {
+    margin: 20px 0;
+}
+
+.mcu-box, .agent-box, .database-box {
+    border-radius: 5px;
+    padding: 10px;
+    margin: 5px;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+}
+
+.arrow-down {
+    font-size: 24px;
+    color: #6c757d;
+}
+
+/* Insights and Recommendations */
+.insight-item, .recommendation-item, .data-source-item {
+    transition: all 0.3s ease;
+}
+
+.insight-item:hover, .recommendation-item:hover, .data-source-item:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);
+}
+
+.insight-icon, .recommendation-icon, .data-source-icon {
+    min-width: 50px;
+    text-align: center;
+}
+
+/* Metrics */
+.metric-item h6 {
+    margin-bottom: 0.5rem;
+}
+
+/* Analysis Visualizations */
+.analysis-visualization, .optimization-visualization {
+    text-align: center;
+    margin-bottom: 1.5rem;
+}
+
+.analysis-visualization img, .optimization-visualization img {
+    max-width: 100%;
+    height: auto;
+    box-shadow: 0 0.125rem 0.25rem rgba(0, 0, 0, 0.075);
+}
+
+/* Implementation Plan */
+.implementation-plan {
+    padding: 15px;
+}
+
+.phase-item {
+    margin-bottom: 15px;
+}
+
+.phase-item h6 {
+    color: #495057;
+    font-weight: 600;
+}
+
+/* Markdown Content */
+.markdown-content {
+    line-height: 1.6;
+}
+
+.markdown-content h1, 
+.markdown-content h2, 
+.markdown-content h3, 
+.markdown-content h4, 
+.markdown-content h5, 
+.markdown-content h6 {
+    margin-top: 1.5rem;
+    margin-bottom: 1rem;
+}
+
+.markdown-content h1 {
+    font-size: 2rem;
+}
+
+.markdown-content h2 {
+    font-size: 1.75rem;
+}
+
+.markdown-content h3 {
+    font-size: 1.5rem;
+}
+
+.markdown-content h4 {
+    font-size: 1.25rem;
+}
+
+.markdown-content p {
+    margin-bottom: 1rem;
+}
+
+.markdown-content ul, 
+.markdown-content ol {
+    margin-bottom: 1rem;
+    padding-left: 2rem;
+}
+
+.markdown-content code {
+    background-color: #f8f9fa;
+    padding: 0.2rem 0.4rem;
+    border-radius: 0.25rem;
+}
+
+.markdown-content pre {
+    background-color: #f8f9fa;
+    padding: 1rem;
+    border-radius: 0.25rem;
+    overflow-x: auto;
+}
+
+/* Footer */
+.footer {
+    margin-top: 2rem;
+    padding: 1rem 0;
+    background-color: #f8f9fa;
+    border-top: 1px solid #dee2e6;
+}
+
+/* Responsive Adjustments */
+@media (max-width: 768px) {
+    .card-body {
+        padding: 1rem;
+    }
+    
+    .status-timeline {
+        padding-left: 20px;
+    }
+    
+    .timeline-marker {
+        left: -20px;
+        width: 15px;
+        height: 15px;
+        line-height: 15px;
+        font-size: 8px;
+    }
+}

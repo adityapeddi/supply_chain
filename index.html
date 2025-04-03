@@ -1,0 +1,287 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <div class="jumbotron bg-light p-5 rounded">
+            <h1 class="display-4">
+                <i class="fas fa-robot text-primary me-2"></i>
+                Multi-Agent Retail Inventory Optimization
+            </h1>
+            <p class="lead">
+                A sophisticated system using agentic AI and real-time data integration to optimize retail inventory management.
+            </p>
+            <hr class="my-4">
+            <p>
+                This web application provides a user-friendly interface to the multi-agent system developed for a Master's thesis in Data Analytics.
+                The system uses real-time data from multiple APIs to analyze retail inventory patterns and generate optimal inventory policies.
+            </p>
+            
+            <div class="row mt-4">
+                <div class="col-md-6">
+                    <div class="card mb-4">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">
+                                <i class="fas fa-cogs me-2"></i>
+                                System Status
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="status-indicators">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <span>System Initialized:</span>
+                                    <span class="badge {% if system_state.initialized %}bg-success{% else %}bg-danger{% endif %} p-2">
+                                        {% if system_state.initialized %}Yes{% else %}No{% endif %}
+                                    </span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <span>Data Extraction:</span>
+                                    <span class="badge {% if system_state.data_extraction_completed %}bg-success{% else %}bg-warning{% endif %} p-2">
+                                        {% if system_state.data_extraction_completed %}Completed{% else %}Pending{% endif %}
+                                    </span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <span>Data Analysis:</span>
+                                    <span class="badge {% if system_state.eda_completed %}bg-success{% else %}bg-warning{% endif %} p-2">
+                                        {% if system_state.eda_completed %}Completed{% else %}Pending{% endif %}
+                                    </span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <span>Optimization:</span>
+                                    <span class="badge {% if system_state.decision_completed %}bg-success{% else %}bg-warning{% endif %} p-2">
+                                        {% if system_state.decision_completed %}Completed{% else %}Pending{% endif %}
+                                    </span>
+                                </div>
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <span>Last Execution:</span>
+                                    <span>
+                                        {% if system_state.last_execution_time %}
+                                            {{ system_state.last_execution_time.strftime('%Y-%m-%d %H:%M:%S') }}
+                                        {% else %}
+                                            Never
+                                        {% endif %}
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-4">
+                                <button id="initialize-btn" class="btn btn-primary me-2" {% if system_state.initialized %}disabled{% endif %}>
+                                    <i class="fas fa-power-off me-1"></i> Initialize System
+                                </button>
+                                <button id="execute-btn" class="btn btn-success" {% if not system_state.initialized or system_state.running %}disabled{% endif %}>
+                                    <i class="fas fa-play me-1"></i> Execute System
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-md-6">
+                    <div class="card mb-4">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">
+                                <i class="fas fa-robot me-2"></i>
+                                Agent Architecture
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="agent-diagram text-center">
+                                <div class="mcu-box p-2 mb-3 bg-primary text-white rounded">
+                                    <strong>Master Control Unit (MCU)</strong>
+                                </div>
+                                <div class="arrow-down mb-3">
+                                    <i class="fas fa-arrow-down"></i>
+                                </div>
+                                <div class="row">
+                                    <div class="col-md-4">
+                                        <div class="agent-box p-2 mb-2 bg-info text-white rounded">
+                                            <strong>Data Extraction Agent</strong>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="agent-box p-2 mb-2 bg-info text-white rounded">
+                                            <strong>EDA Agent</strong>
+                                        </div>
+                                    </div>
+                                    <div class="col-md-4">
+                                        <div class="agent-box p-2 mb-2 bg-info text-white rounded">
+                                            <strong>Decision Agent</strong>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="database-box p-2 mt-3 bg-secondary text-white rounded">
+                                    <strong>Shared Database</strong>
+                                </div>
+                            </div>
+                            
+                            <div class="mt-4">
+                                <a href="/dashboard" class="btn btn-outline-primary">
+                                    <i class="fas fa-tachometer-alt me-1"></i> View Dashboard
+                                </a>
+                                <button id="generate-demo-btn" class="btn btn-outline-secondary ms-2">
+                                    <i class="fas fa-magic me-1"></i> Generate Demo Data
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="row mt-2">
+                <div class="col-md-12">
+                    <div class="card">
+                        <div class="card-header bg-primary text-white">
+                            <h5 class="mb-0">
+                                <i class="fas fa-info-circle me-2"></i>
+                                System Overview
+                            </h5>
+                        </div>
+                        <div class="card-body">
+                            <div class="row">
+                                <div class="col-md-6">
+                                    <h5>Key Features</h5>
+                                    <ul class="list-group list-group-flush">
+                                        <li class="list-group-item">
+                                            <i class="fas fa-check-circle text-success me-2"></i>
+                                            Real-time data integration from multiple API sources
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-check-circle text-success me-2"></i>
+                                            Advanced exploratory data analysis with visualizations
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-check-circle text-success me-2"></i>
+                                            Multi-agent reinforcement learning for inventory optimization
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-check-circle text-success me-2"></i>
+                                            Comprehensive reporting and actionable recommendations
+                                        </li>
+                                    </ul>
+                                </div>
+                                <div class="col-md-6">
+                                    <h5>Navigation Guide</h5>
+                                    <ul class="list-group list-group-flush">
+                                        <li class="list-group-item">
+                                            <i class="fas fa-tachometer-alt text-primary me-2"></i>
+                                            <strong>Dashboard:</strong> System overview and key metrics
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-database text-primary me-2"></i>
+                                            <strong>Data:</strong> View and explore extracted data
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-chart-line text-primary me-2"></i>
+                                            <strong>Analysis:</strong> Exploratory data analysis results
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-cogs text-primary me-2"></i>
+                                            <strong>Optimization:</strong> Inventory optimization results
+                                        </li>
+                                        <li class="list-group-item">
+                                            <i class="fas fa-file-alt text-primary me-2"></i>
+                                            <strong>Reports:</strong> Comprehensive system reports
+                                        </li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    $(document).ready(function() {
+        // Initialize system button
+        $('#initialize-btn').click(function() {
+            $(this).prop('disabled', true);
+            $(this).html('<i class="fas fa-spinner fa-spin me-1"></i> Initializing...');
+            
+            $.ajax({
+                url: '/api/system/initialize',
+                type: 'POST',
+                success: function(response) {
+                    if (response.success) {
+                        showAlert('System initialized successfully!', 'success');
+                        setTimeout(function() {
+                            location.reload();
+                        }, 1500);
+                    } else {
+                        showAlert('Failed to initialize system. Check logs for details.', 'danger');
+                        $('#initialize-btn').prop('disabled', false);
+                        $('#initialize-btn').html('<i class="fas fa-power-off me-1"></i> Initialize System');
+                    }
+                },
+                error: function() {
+                    showAlert('Error initializing system. Check logs for details.', 'danger');
+                    $('#initialize-btn').prop('disabled', false);
+                    $('#initialize-btn').html('<i class="fas fa-power-off me-1"></i> Initialize System');
+                }
+            });
+        });
+        
+        // Execute system button
+        $('#execute-btn').click(function() {
+            $(this).prop('disabled', true);
+            $(this).html('<i class="fas fa-spinner fa-spin me-1"></i> Executing...');
+            
+            $.ajax({
+                url: '/api/system/execute',
+                type: 'POST',
+                success: function(response) {
+                    if (response.success) {
+                        showAlert('System execution started!', 'success');
+                        startStatusPolling();
+                    } else {
+                        showAlert('Failed to execute system. Check logs for details.', 'danger');
+                        $('#execute-btn').prop('disabled', false);
+                        $('#execute-btn').html('<i class="fas fa-play me-1"></i> Execute System');
+                    }
+                },
+                error: function() {
+                    showAlert('Error executing system. Check logs for details.', 'danger');
+                    $('#execute-btn').prop('disabled', false);
+                    $('#execute-btn').html('<i class="fas fa-play me-1"></i> Execute System');
+                }
+            });
+        });
+        
+        // Generate demo data button
+        $('#generate-demo-btn').click(function() {
+            $(this).prop('disabled', true);
+            $(this).html('<i class="fas fa-spinner fa-spin me-1"></i> Generating...');
+            
+            $.ajax({
+                url: '/api/demo/generate',
+                type: 'POST',
+                success: function(response) {
+                    if (response.success) {
+                        showAlert('Demo data generated successfully!', 'success');
+                        setTimeout(function() {
+                            location.reload();
+                        }, 1500);
+                    } else {
+                        showAlert('Failed to generate demo data. Check logs for details.', 'danger');
+                        $('#generate-demo-btn').prop('disabled', false);
+                        $('#generate-demo-btn').html('<i class="fas fa-magic me-1"></i> Generate Demo Data');
+                    }
+                },
+                error: function() {
+                    showAlert('Error generating demo data. Check logs for details.', 'danger');
+                    $('#generate-demo-btn').prop('disabled', false);
+                    $('#generate-demo-btn').html('<i class="fas fa-magic me-1"></i> Generate Demo Data');
+                }
+            });
+        });
+        
+        // Function to show alerts
+        function showAlert(message, type) {
+            var alertHtml = '<div class="alert alert-' + type + ' alert-dismissible fade show" role="alert">' +
+                message +
+                '<button type="button" class="btn-close" data-b
+(Content truncated due to size limit. Use line ranges to read in chunks)
