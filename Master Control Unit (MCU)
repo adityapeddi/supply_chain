@@ -1,0 +1,972 @@
+#!/usr/bin/env python3
+"""
+Master Control Unit (MCU)
+
+This module is responsible for:
+1. Coordinating the three specialized AI agents in the retail inventory optimization system
+2. Managing data flow between agents
+3. Scheduling agent execution
+4. Providing a unified interface for the entire system
+5. Monitoring system performance and handling errors
+
+Author: Aditya
+Date: March 31, 2025
+"""
+
+import os
+import sys
+import json
+import time
+import logging
+import argparse
+import sqlite3
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Union, Tuple
+import importlib.util
+import threading
+import queue
+import traceback
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("mcu.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("MCU")
+
+class AgentInterface:
+    """Base interface for all agents in the system"""
+    
+    def __init__(self, agent_name: str, agent_path: str):
+        """
+        Initialize the agent interface
+        
+        Args:
+            agent_name: Name of the agent
+            agent_path: Path to the agent module
+        """
+        self.agent_name = agent_name
+        self.agent_path = agent_path
+        self.agent_module = None
+        self.agent_instance = None
+        
+        logger.info(f"Initialized interface for {agent_name}")
+    
+    def load_agent(self) -> bool:
+        """
+        Load the agent module
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Load module from file path
+            spec = importlib.util.spec_from_file_location(self.agent_name, self.agent_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            
+            self.agent_module = module
+            logger.info(f"Successfully loaded {self.agent_name} module")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error loading {self.agent_name} module: {str(e)}")
+            return False
+    
+    def initialize_agent(self, **kwargs) -> bool:
+        """
+        Initialize the agent instance
+        
+        Args:
+            **kwargs: Keyword arguments for agent initialization
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # This method should be implemented by subclasses
+            raise NotImplementedError("initialize_agent method must be implemented by subclasses")
+            
+        except Exception as e:
+            logger.error(f"Error initializing {self.agent_name}: {str(e)}")
+            return False
+    
+    def execute(self, **kwargs) -> Any:
+        """
+        Execute the agent's main functionality
+        
+        Args:
+            **kwargs: Keyword arguments for execution
+            
+        Returns:
+            Result of agent execution
+        """
+        try:
+            # This method should be implemented by subclasses
+            raise NotImplementedError("execute method must be implemented by subclasses")
+            
+        except Exception as e:
+            logger.error(f"Error executing {self.agent_name}: {str(e)}")
+            return None
+
+
+class DataExtractionAgentInterface(AgentInterface):
+    """Interface for the Data Extraction Agent"""
+    
+    def __init__(self, agent_path: str):
+        """
+        Initialize the Data Extraction Agent interface
+        
+        Args:
+            agent_path: Path to the agent module
+        """
+        super().__init__("DataExtractionAgent", agent_path)
+    
+    def initialize_agent(self, config_path: Optional[str] = None, **kwargs) -> bool:
+        """
+        Initialize the Data Extraction Agent
+        
+        Args:
+            config_path: Path to configuration file
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if self.agent_module is None:
+                if not self.load_agent():
+                    return False
+            
+            # Get the agent class
+            agent_class = getattr(self.agent_module, "DataExtractionAgent")
+            
+            # Initialize the agent
+            self.agent_instance = agent_class(config_path=config_path)
+            
+            logger.info("Successfully initialized Data Extraction Agent")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error initializing Data Extraction Agent: {str(e)}")
+            return False
+    
+    def execute(self, mode: str = "all", **kwargs) -> bool:
+        """
+        Execute the Data Extraction Agent
+        
+        Args:
+            mode: Execution mode ("all", "stock", "sales", "shipping", "supplier", "economic")
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if self.agent_instance is None:
+                logger.error("Data Extraction Agent not initialized")
+                return False
+            
+            logger.info(f"Executing Data Extraction Agent in {mode} mode")
+            
+            # Execute the appropriate method based on mode
+            if mode == "all":
+                self.agent_instance.extract_all_data()
+            elif mode == "stock":
+                self.agent_instance.extract_stock_data()
+            elif mode == "sales":
+                self.agent_instance.extract_sales_data()
+            elif mode == "shipping":
+                self.agent_instance.extract_shipping_data()
+            elif mode == "supplier":
+                self.agent_instance.extract_supplier_data()
+            elif mode == "economic":
+                self.agent_instance.extract_economic_data()
+            else:
+                logger.error(f"Unknown execution mode: {mode}")
+                return False
+            
+            logger.info("Data Extraction Agent execution completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error executing Data Extraction Agent: {str(e)}")
+            return False
+    
+    def get_data_for_analysis(self) -> Dict[str, pd.DataFrame]:
+        """
+        Get data for analysis from the Data Extraction Agent
+        
+        Returns:
+            Dictionary of DataFrames containing data for analysis
+        """
+        try:
+            if self.agent_instance is None:
+                logger.error("Data Extraction Agent not initialized")
+                return {}
+            
+            logger.info("Getting data for analysis from Data Extraction Agent")
+            
+            # Call the agent's method to get data
+            data = self.agent_instance.get_data_for_analysis()
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error getting data from Data Extraction Agent: {str(e)}")
+            return {}
+
+
+class EDAAgentInterface(AgentInterface):
+    """Interface for the Exploratory Data Analysis Agent"""
+    
+    def __init__(self, agent_path: str):
+        """
+        Initialize the EDA Agent interface
+        
+        Args:
+            agent_path: Path to the agent module
+        """
+        super().__init__("EDAAgent", agent_path)
+    
+    def initialize_agent(self, db_path: str = "retail_data.db", output_dir: str = "analysis_results", **kwargs) -> bool:
+        """
+        Initialize the EDA Agent
+        
+        Args:
+            db_path: Path to the database file
+            output_dir: Directory to save analysis results
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if self.agent_module is None:
+                if not self.load_agent():
+                    return False
+            
+            # Get the agent class
+            agent_class = getattr(self.agent_module, "EDAAgent")
+            
+            # Initialize the agent
+            self.agent_instance = agent_class(db_path=db_path, output_dir=output_dir)
+            
+            logger.info("Successfully initialized EDA Agent")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error initializing EDA Agent: {str(e)}")
+            return False
+    
+    def execute(self, **kwargs) -> Dict[str, Any]:
+        """
+        Execute the EDA Agent
+        
+        Args:
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Dictionary containing analysis results and insights
+        """
+        try:
+            if self.agent_instance is None:
+                logger.error("EDA Agent not initialized")
+                return {}
+            
+            logger.info("Executing EDA Agent")
+            
+            # Run the analysis pipeline
+            insights = self.agent_instance.run_analysis()
+            
+            logger.info("EDA Agent execution completed")
+            return insights
+            
+        except Exception as e:
+            logger.error(f"Error executing EDA Agent: {str(e)}")
+            return {}
+    
+    def get_recommendations(self) -> List[Dict[str, str]]:
+        """
+        Get recommendations from the EDA Agent
+        
+        Returns:
+            List of recommendation dictionaries
+        """
+        try:
+            if self.agent_instance is None:
+                logger.error("EDA Agent not initialized")
+                return []
+            
+            logger.info("Getting recommendations from EDA Agent")
+            
+            # Call the agent's method to get recommendations
+            recommendations = self.agent_instance.get_recommendations()
+            
+            return recommendations
+            
+        except Exception as e:
+            logger.error(f"Error getting recommendations from EDA Agent: {str(e)}")
+            return []
+    
+    def get_summary_report_path(self) -> str:
+        """
+        Get the path to the summary report
+        
+        Returns:
+            Path to the summary report file
+        """
+        try:
+            if self.agent_instance is None:
+                logger.error("EDA Agent not initialized")
+                return ""
+            
+            return self.agent_instance.get_summary_report_path()
+            
+        except Exception as e:
+            logger.error(f"Error getting summary report path from EDA Agent: {str(e)}")
+            return ""
+
+
+class DecisionAgentInterface(AgentInterface):
+    """Interface for the Decision Optimization Agent"""
+    
+    def __init__(self, agent_path: str):
+        """
+        Initialize the Decision Agent interface
+        
+        Args:
+            agent_path: Path to the agent module
+        """
+        super().__init__("DecisionAgent", agent_path)
+    
+    def initialize_agent(self, db_path: str = "retail_data.db", output_dir: str = "optimization_results", **kwargs) -> bool:
+        """
+        Initialize the Decision Agent
+        
+        Args:
+            db_path: Path to the database file
+            output_dir: Directory to save optimization results
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            if self.agent_module is None:
+                if not self.load_agent():
+                    return False
+            
+            # Get the agent class
+            agent_class = getattr(self.agent_module, "DecisionOptimizationAgent")
+            
+            # Initialize the agent
+            self.agent_instance = agent_class(db_path=db_path, output_dir=output_dir)
+            
+            logger.info("Successfully initialized Decision Optimization Agent")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error initializing Decision Optimization Agent: {str(e)}")
+            return False
+    
+    def execute(self, **kwargs) -> Dict[str, Any]:
+        """
+        Execute the Decision Agent
+        
+        Args:
+            **kwargs: Additional keyword arguments
+            
+        Returns:
+            Dictionary containing optimization results
+        """
+        try:
+            if self.agent_instance is None:
+                logger.error("Decision Optimization Agent not initialized")
+                return {}
+            
+            logger.info("Executing Decision Optimization Agent")
+            
+            # Generate recommendations
+            results = self.agent_instance.generate_decision_recommendations()
+            
+            logger.info("Decision Optimization Agent execution completed")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error executing Decision Optimization Agent: {str(e)}")
+            return {}
+
+
+class AgentExecutionThread(threading.Thread):
+    """Thread for executing an agent"""
+    
+    def __init__(self, agent_interface: AgentInterface, execution_args: Dict[str, Any], result_queue: queue.Queue):
+        """
+        Initialize the agent execution thread
+        
+        Args:
+            agent_interface: Agent interface to execute
+            execution_args: Arguments for agent execution
+            result_queue: Queue to store execution results
+        """
+        super().__init__()
+        self.agent_interface = agent_interface
+        self.execution_args = execution_args
+        self.result_queue = result_queue
+        self.exception = None
+    
+    def run(self):
+        """Execute the agent and store results in the queue"""
+        try:
+            # Execute the agent
+            result = self.agent_interface.execute(**self.execution_args)
+            
+            # Put result in the queue
+            self.result_queue.put((self.agent_interface.agent_name, result))
+            
+        except Exception as e:
+            self.exception = e
+            logger.error(f"Error in {self.agent_interface.agent_name} execution thread: {str(e)}")
+            logger.error(traceback.format_exc())
+            
+            # Put error in the queue
+            self.result_queue.put((self.agent_interface.agent_name, {"error": str(e)}))
+
+
+class MasterControlUnit:
+    """
+    Master Control Unit for coordinating the three specialized AI agents
+    
+    This class manages the execution of the three agents:
+    1. Data Extraction Agent: Extracts and transforms data from various sources
+    2. EDA Agent: Analyzes data and generates insights
+    3. Decision Optimization Agent: Makes inventory optimization decisions
+    """
+    
+    def __init__(self, config_path: Optional[str] = None):
+        """
+        Initialize the Master Control Unit
+        
+        Args:
+            config_path: Path to configuration file
+        """
+        # Load configuration
+        self.config = self._load_config(config_path)
+        
+        # Set up paths
+        self.base_dir = self.config.get("base_dir", os.path.dirname(os.path.abspath(__file__)))
+        self.db_path = self.config.get("db_path", os.path.join(self.base_dir, "retail_data.db"))
+        self.output_dir = self.config.get("output_dir", os.path.join(self.base_dir, "output"))
+        
+        # Create output directory if it doesn't exist
+        os.makedirs(self.output_dir, exist_ok=True)
+        
+        # Set up agent paths
+        self.agent_paths = {
+            "data_extraction": self.config.get("data_extraction_agent_path", 
+                                              os.path.join(self.base_dir, "data_extraction_agent.py")),
+            "eda": self.config.get("eda_agent_path", 
+                                  os.path.join(self.base_dir, "exploratory_data_analysis_agent.py")),
+            "decision": self.config.get("decision_agent_path", 
+                                       os.path.join(self.base_dir, "decision_optimization_agent.py"))
+        }
+        
+        # Initialize agent interfaces
+        self.data_extraction_agent = DataExtractionAgentInterface(self.agent_paths["data_extraction"])
+        self.eda_agent = EDAAgentInterface(self.agent_paths["eda"])
+        self.decision_agent = DecisionAgentInterface(self.agent_paths["decision"])
+        
+        # Initialize execution state
+        self.execution_state = {
+            "data_extraction_completed": False,
+            "eda_completed": False,
+            "decision_completed": False,
+            "last_execution_time": None,
+            "execution_count": 0
+        }
+        
+        # Initialize results storage
+        self.results = {
+            "data_extraction": None,
+            "eda": None,
+            "decision": None
+        }
+        
+        logger.info("Master Control Unit initialized")
+    
+    def _load_config(self, config_path: Optional[str]) -> Dict[str, Any]:
+        """
+        Load configuration from file
+        
+        Args:
+            config_path: Path to configuration file
+            
+        Returns:
+            Configuration dictionary
+        """
+        default_config = {
+            "base_dir": os.path.dirname(os.path.abspath(__file__)),
+            "db_path": "retail_data.db",
+            "output_dir": "output",
+            "data_extraction_agent_path": "data_extraction_agent.py",
+            "eda_agent_path": "exploratory_data_analysis_agent.py",
+            "decision_agent_path": "decision_optimization_agent.py",
+            "execution_interval": 3600,  # 1 hour in seconds
+            "parallel_execution": False
+        }
+        
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+                    # Update default config with loaded values
+                    default_config.update(config)
+                logger.info(f"Loaded configuration from {config_path}")
+            except Exception as e:
+                logger.error(f"Error loading configuration from {config_path}: {str(e)}")
+        
+        return default_config
+    
+    def initialize_agents(self) -> bool:
+        """
+        Initialize all agents
+        
+        Returns:
+            True if all agents initialized successfully, False otherwise
+        """
+        try:
+            logger.info("Initializing agents")
+            
+            # Initialize Data Extraction Agent
+            data_extraction_success = self.data_extraction_agent.initialize_agent(
+                config_path=self.config.get("data_extraction_config_path")
+            )
+            
+            if not data_extraction_success:
+                logger.error("Failed to initialize Data Extraction Agent")
+                return False
+            
+            # Initialize EDA Agent
+            eda_success = self.eda_agent.initialize_agent(
+                db_path=self.db_path,
+                output_dir=os.path.join(self.output_dir, "analysis_results")
+            )
+            
+            if not eda_success:
+                logger.error("Failed to initialize EDA Agent")
+                return False
+            
+            # Initialize Decision Optimization Agent
+            decision_success = self.decision_agent.initialize_agent(
+                db_path=self.db_path,
+                output_dir=os.path.join(self.output_dir, "optimization_results")
+            )
+            
+            if not decision_success:
+                logger.error("Failed to initialize Decision Optimization Agent")
+                return False
+            
+            logger.info("All agents initialized successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error initializing agents: {str(e)}")
+            return False
+    
+    def execute_sequential(self) -> Dict[str, Any]:
+        """
+        Execute agents sequentially
+        
+        Returns:
+            Dictionary containing execution results
+        """
+        try:
+            logger.info("Starting sequential execution of agents")
+            
+            # Execute Data Extraction Agent
+            logger.info("Executing Data Extraction Agent")
+            data_extraction_success = self.data_extraction_agent.execute(mode="all")
+            
+            if not data_extraction_success:
+                logger.error("Data Extraction Agent execution failed")
+                return {"error": "Data Extraction Agent execution failed"}
+            
+            self.execution_state["data_extraction_completed"] = True
+            
+            # Execute EDA Agent
+            logger.info("Executing EDA Agent")
+            eda_results = self.eda_agent.execute()
+            
+            if not eda_results or "error" in eda_results:
+                logger.error(f"EDA Agent execution failed: {eda_results.get('error', 'Unknown error')}")
+                return {"error": f"EDA Agent execution failed: {eda_results.get('error', 'Unknown error')}"}
+            
+            self.results["eda"] = eda_results
+            self.execution_state["eda_completed"] = True
+            
+            # Execute Decision Optimization Agent
+            logger.info("Executing Decision Optimization Agent")
+            decision_results = self.decision_agent.execute()
+            
+            if not decision_results or "error" in decision_results:
+                logger.error(f"Decision Optimization Agent execution failed: {decision_results.get('error', 'Unknown error')}")
+                return {"error": f"Decision Optimization Agent execution failed: {decision_results.get('error', 'Unknown error')}"}
+            
+            self.results["decision"] = decision_results
+            self.execution_state["decision_completed"] = True
+            
+            # Update execution state
+            self.execution_state["last_execution_time"] = datetime.now()
+            self.execution_state["execution_count"] += 1
+            
+            logger.info("Sequential execution completed successfully")
+            
+            # Compile results
+            results = {
+                "eda_results": eda_results,
+                "decision_results": decision_results,
+                "execution_state": self.execution_state
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error in sequential execution: {str(e)}")
+            return {"error": str(e)}
+    
+    def execute_parallel(self) -> Dict[str, Any]:
+        """
+        Execute agents in parallel
+        
+        Returns:
+            Dictionary containing execution results
+        """
+        try:
+            logger.info("Starting parallel execution of agents")
+            
+            # First, execute Data Extraction Agent (this must be done first)
+            logger.info("Executing Data Extraction Agent")
+            data_extraction_success = self.data_extraction_agent.execute(mode="all")
+            
+            if not data_extraction_success:
+                logger.error("Data Extraction Agent execution failed")
+                return {"error": "Data Extraction Agent execution failed"}
+            
+            self.execution_state["data_extraction_completed"] = True
+            
+            # Create result queue
+            result_queue = queue.Queue()
+            
+            # Create and start threads for EDA and Decision agents
+            eda_thread = AgentExecutionThread(
+                agent_interface=self.eda_agent,
+                execution_args={},
+                result_queue=result_queue
+            )
+            
+            decision_thread = AgentExecutionThread(
+                agent_interface=self.decision_agent,
+                execution_args={},
+                result_queue=result_queue
+            )
+            
+            eda_thread.start()
+            decision_thread.start()
+            
+            # Wait for threads to complete
+            eda_thread.join()
+            decision_thread.join()
+            
+            # Check for exceptions
+            if eda_thread.exception:
+                logger.error(f"EDA Agent thread raised an exception: {str(eda_thread.exception)}")
+            
+            if decision_thread.exception:
+                logger.error(f"Decision Optimization Agent thread raised an exception: {str(decision_thread.exception)}")
+            
+            # Get results from queue
+            results = {}
+            while not result_queue.empty():
+                agent_name, agent_result = result_queue.get()
+                results[agent_name] = agent_result
+            
+            # Update execution state and results
+            if "EDAAgent" in results:
+                self.results["eda"] = results["EDAAgent"]
+                self.execution_state["eda_completed"] = True
+            
+            if "DecisionAgent" in results:
+                self.results["decision"] = results["DecisionAgent"]
+                self.execution_state["decision_completed"] = True
+            
+            # Update execution state
+            self.execution_state["last_execution_time"] = datetime.now()
+            self.execution_state["execution_count"] += 1
+            
+            logger.info("Parallel execution completed")
+            
+            # Compile results
+            final_results = {
+                "eda_results": self.results["eda"],
+                "decision_results": self.results["decision"],
+                "execution_state": self.execution_state
+            }
+            
+            return final_results
+            
+        except Exception as e:
+            logger.error(f"Error in parallel execution: {str(e)}")
+            return {"error": str(e)}
+    
+    def execute(self) -> Dict[str, Any]:
+        """
+        Execute all agents
+        
+        Returns:
+            Dictionary containing execution results
+        """
+        # Check if agents are initialized
+        if (self.data_extraction_agent.agent_instance is None or
+            self.eda_agent.agent_instance is None or
+            self.decision_agent.agent_instance is None):
+            
+            # Initialize agents
+            if not self.initialize_agents():
+                return {"error": "Failed to initialize agents"}
+        
+        # Execute agents based on configuration
+        if self.config.get("parallel_execution", False):
+            return self.execute_parallel()
+        else:
+            return self.execute_sequential()
+    
+    def run_scheduled(self):
+        """Run agents on a schedule"""
+        try:
+            logger.info("Starting scheduled execution")
+            
+            # Initialize agents
+            if not self.initialize_agents():
+                logger.error("Failed to initialize agents, aborting scheduled execution")
+                return
+            
+            # Get execution interval
+            interval_seconds = self.config.get("execution_interval", 3600)  # Default: 1 hour
+            
+            while True:
+                try:
+                    # Execute agents
+                    logger.info(f"Scheduled execution #{self.execution_state['execution_count'] + 1}")
+                    results = self.execute()
+                    
+                    if "error" in results:
+                        logger.error(f"Scheduled execution failed: {results['error']}")
+                    else:
+                        logger.info("Scheduled execution completed successfully")
+                    
+                    # Generate summary report
+                    self.generate_summary_report()
+                    
+                    # Sleep until next execution
+                    logger.info(f"Sleeping for {interval_seconds} seconds until next execution")
+                    time.sleep(interval_seconds)
+                    
+                except KeyboardInterrupt:
+                    logger.info("Scheduled execution interrupted by user")
+                    break
+                except Exception as e:
+                    logger.error(f"Error in scheduled execution: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    
+                    # Sleep for a shorter time before retrying
+                    logger.info("Sleeping for 60 seconds before retrying")
+                    time.sleep(60)
+            
+        except Exception as e:
+            logger.error(f"Error in run_scheduled: {str(e)}")
+            logger.error(traceback.format_exc())
+    
+    def generate_summary_report(self) -> str:
+        """
+        Generate a summary report of the system execution
+        
+        Returns:
+            Path to the generated report
+        """
+        try:
+            report = []
+            
+            report.append("# Retail Inventory Optimization System Report")
+            report.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            # Execution state
+            report.append("## Execution State")
+            report.append(f"- Execution Count: {self.execution_state['execution_count']}")
+            
+            if self.execution_state["last_execution_time"]:
+                report.append(f"- Last Execution: {self.execution_state['last_execution_time'].strftime('%Y-%m-%d %H:%M:%S')}")
+            
+            report.append(f"- Data Extraction Completed: {self.execution_state['data_extraction_completed']}")
+            report.append(f"- EDA Completed: {self.execution_state['eda_completed']}")
+            report.append(f"- Decision Optimization Completed: {self.execution_state['decision_completed']}")
+            
+            # Add links to agent reports
+            report.append("\n## Agent Reports")
+            
+            # EDA report
+            eda_report_path = self.eda_agent.get_summary_report_path()
+            if eda_report_path and os.path.exists(eda_report_path):
+                report.append(f"- [EDA Summary Report]({eda_report_path})")
+            
+            # Decision optimization report
+            decision_report_path = os.path.join(self.output_dir, "optimization_results", "decision_optimization_report.md")
+            if os.path.exists(decision_report_path):
+                report.append(f"- [Decision Optimization Report]({decision_report_path})")
+            
+            # Add key recommendations if available
+            if self.results["eda"] and "recommendations" in self.results["eda"]:
+                report.append("\n## Key Insights and Recommendations")
+                
+                recommendations = self.results["eda"]["recommendations"]
+                for i, rec in enumerate(recommendations[:5], 1):  # Show top 5 recommendations
+                    report.append(f"{i}. **{rec.get('area', 'General')}**: {rec.get('recommendation', '')}")
+            
+            # Add optimization results if available
+            if self.results["decision"] and "policies" in self.results["decision"]:
+                report.append("\n## Inventory Optimization Results")
+                
+                policies = self.results["decision"]["policies"]
+                for product_id, policy in list(policies.items())[:5]:  # Show top 5 products
+                    report.append(f"- **{product_id}**: Order {policy.get('eoq', 0):.0f} units when inventory reaches {policy.get('reorder_point', 0):.0f} units")
+            
+            # Write report to file
+            report_path = os.path.join(self.output_dir, "system_summary_report.md")
+            with open(report_path, "w") as f:
+                f.write("\n".join(report))
+            
+            logger.info(f"Generated summary report at {report_path}")
+            
+            return report_path
+            
+        except Exception as e:
+            logger.error(f"Error generating summary report: {str(e)}")
+            return ""
+    
+    def get_system_status(self) -> Dict[str, Any]:
+        """
+        Get the current status of the system
+        
+        Returns:
+            Dictionary containing system status
+        """
+        try:
+            # Check database status
+            db_exists = os.path.exists(self.db_path)
+            db_size = os.path.getsize(self.db_path) if db_exists else 0
+            
+            # Check output directories
+            analysis_dir = os.path.join(self.output_dir, "analysis_results")
+            optimization_dir = os.path.join(self.output_dir, "optimization_results")
+            
+            analysis_dir_exists = os.path.exists(analysis_dir)
+            optimization_dir_exists = os.path.exists(optimization_dir)
+            
+            # Compile status
+            status = {
+                "system": {
+                    "initialized": (self.data_extraction_agent.agent_instance is not None and
+                                   self.eda_agent.agent_instance is not None and
+                                   self.decision_agent.agent_instance is not None),
+                    "execution_count": self.execution_state["execution_count"],
+                    "last_execution_time": self.execution_state["last_execution_time"]
+                },
+                "database": {
+                    "exists": db_exists,
+                    "size_bytes": db_size,
+                    "size_mb": db_size / (1024 * 1024) if db_exists else 0
+                },
+                "output": {
+                    "analysis_dir_exists": analysis_dir_exists,
+                    "optimization_dir_exists": optimization_dir_exists
+                },
+                "agents": {
+                    "data_extraction": {
+                        "initialized": self.data_extraction_agent.agent_instance is not None,
+                        "completed": self.execution_state["data_extraction_completed"]
+                    },
+                    "eda": {
+                        "initialized": self.eda_agent.agent_instance is not None,
+                        "completed": self.execution_state["eda_completed"]
+                    },
+                    "decision": {
+                        "initialized": self.decision_agent.agent_instance is not None,
+                        "completed": self.execution_state["decision_completed"]
+                    }
+                }
+            }
+            
+            return status
+            
+        except Exception as e:
+            logger.error(f"Error getting system status: {str(e)}")
+            return {"error": str(e)}
+
+
+def main():
+    """Main function to run the Master Control Unit"""
+    parser = argparse.ArgumentParser(description="Master Control Unit for Retail Inventory Optimization")
+    parser.add_argument("--config", help="Path to configuration file")
+    parser.add_argument("--mode", choices=["once", "scheduled"], default="once",
+                       help="Execution mode: 'once' for single execution, 'scheduled' for periodic execution")
+    args = parser.parse_args()
+    
+    try:
+        # Initialize MCU
+        mcu = MasterControlUnit(config_path=args.config)
+        
+        # Run in specified mode
+        if args.mode == "scheduled":
+            mcu.run_scheduled()
+        else:
+            # Initialize agents
+            if not mcu.initialize_agents():
+                logger.error("Failed to initialize agents, aborting execution")
+                return
+            
+            # Execute once
+            results = mcu.execute()
+            
+            if "error" in results:
+                logger.error(f"Execution failed: {results['error']}")
+            else:
+                logger.info("Execution completed successfully")
+                
+                # Generate summary report
+                report_path = mcu.generate_summary_report()
+                print(f"\nExecution completed successfully.")
+                print(f"Summary report: {report_path}")
+                
+                # Print system status
+                status = mcu.get_system_status()
+                print("\nSystem Status:")
+                print(f"- Database Size: {status['database']['size_mb']:.2f} MB")
+                print(f"- Execution Count: {status['system']['execution_count']}")
+                
+                if status['system']['last_execution_time']:
+                    print(f"- Last Execution: {status['system']['last_execution_time'].strftime('%Y-%m-%d %H:%M:%S')}")
+        
+    except Exception as e:
+        logger.error(f"Error in main function: {str(e)}")
+        logger.error(traceback.format_exc())
+        print(f"Error: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
