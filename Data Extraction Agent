@@ -1,0 +1,1329 @@
+#!/usr/bin/env python3
+"""
+Data Extraction and Transformation Agent
+
+This agent is responsible for:
+1. Extracting data from multiple API sources
+2. Transforming the data into a unified format
+3. Storing the processed data for use by other agents
+4. Handling API rate limits, errors, and data validation
+
+Author: [Your Name]
+Date: March 31, 2025
+"""
+
+import sys
+import os
+import time
+import json
+import logging
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import requests
+from requests.exceptions import RequestException
+import aiohttp
+import asyncio
+import sqlite3
+from typing import Dict, List, Any, Optional, Union
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("data_extraction_agent.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("DataExtractionAgent")
+
+class APIClient:
+    """Base class for API interactions with rate limiting and error handling"""
+    
+    def __init__(self, base_url: str, api_key: Optional[str] = None, 
+                 rate_limit: int = 1, rate_period: int = 1):
+        """
+        Initialize the API client
+        
+        Args:
+            base_url: Base URL for the API
+            api_key: API key for authentication (if required)
+            rate_limit: Maximum number of requests in rate_period
+            rate_period: Time period in seconds for rate limiting
+        """
+        self.base_url = base_url
+        self.api_key = api_key
+        self.rate_limit = rate_limit
+        self.rate_period = rate_period
+        self.last_request_time = 0
+        self.session = requests.Session()
+        
+        if api_key:
+            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
+        
+        logger.info(f"Initialized API client for {base_url}")
+    
+    def _respect_rate_limit(self):
+        """Ensure rate limits are respected by adding delays if necessary"""
+        current_time = time.time()
+        time_since_last_request = current_time - self.last_request_time
+        
+        if time_since_last_request < self.rate_period / self.rate_limit:
+            sleep_time = (self.rate_period / self.rate_limit) - time_since_last_request
+            logger.debug(f"Rate limit: sleeping for {sleep_time:.2f} seconds")
+            time.sleep(sleep_time)
+        
+        self.last_request_time = time.time()
+    
+    def request(self, endpoint: str, method: str = "GET", params: Dict = None, 
+                data: Dict = None, headers: Dict = None, retries: int = 3) -> Dict:
+        """
+        Make an API request with rate limiting and error handling
+        
+        Args:
+            endpoint: API endpoint to call
+            method: HTTP method (GET, POST, etc.)
+            params: Query parameters
+            data: Request body for POST/PUT
+            headers: Additional headers
+            retries: Number of retry attempts for failed requests
+            
+        Returns:
+            API response as dictionary
+        """
+        url = f"{self.base_url}/{endpoint}"
+        attempt = 0
+        
+        while attempt < retries:
+            try:
+                self._respect_rate_limit()
+                
+                response = self.session.request(
+                    method=method,
+                    url=url,
+                    params=params,
+                    json=data,
+                    headers=headers
+                )
+                
+                response.raise_for_status()
+                return response.json()
+                
+            except RequestException as e:
+                attempt += 1
+                wait_time = 2 ** attempt  # Exponential backoff
+                
+                if attempt < retries:
+                    logger.warning(f"Request failed: {str(e)}. Retrying in {wait_time} seconds...")
+                    time.sleep(wait_time)
+                else:
+                    logger.error(f"Request failed after {retries} attempts: {str(e)}")
+                    raise
+        
+        return {}  # Should never reach here due to raise in except block
+
+
+class YahooFinanceAPI(APIClient):
+    """Client for Yahoo Finance API"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Yahoo Finance API client"""
+        super().__init__(
+            base_url="https://yahoo-finance-api.example.com",  # Replace with actual API URL
+            api_key=api_key,
+            rate_limit=5,  # Adjust based on actual API limits
+            rate_period=60
+        )
+    
+    def get_stock_profile(self, symbol: str, region: str = "US", lang: str = "en-US") -> Dict:
+        """
+        Get company profile information
+        
+        Args:
+            symbol: Stock symbol
+            region: Region code
+            lang: Language code
+            
+        Returns:
+            Company profile data
+        """
+        logger.info(f"Fetching stock profile for {symbol}")
+        
+        try:
+            # In a real implementation, this would use the actual API
+            # For simulation, we'll use a mock implementation
+            
+            # This simulates calling: 
+            # self.request(f"v1/finance/stock/profile", params={"symbol": symbol, "region": region, "lang": lang})
+            
+            # Mock implementation for demonstration
+            return self._mock_get_stock_profile(symbol)
+            
+        except Exception as e:
+            logger.error(f"Error fetching stock profile for {symbol}: {str(e)}")
+            return {}
+    
+    def get_stock_chart(self, symbol: str, interval: str = "1d", range_period: str = "3mo") -> Dict:
+        """
+        Get stock chart data
+        
+        Args:
+            symbol: Stock symbol
+            interval: Data interval (1m, 5m, 1h, 1d, 1wk, 1mo)
+            range_period: Time range (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
+            
+        Returns:
+            Stock chart data
+        """
+        logger.info(f"Fetching stock chart for {symbol} with interval {interval} and range {range_period}")
+        
+        try:
+            # Mock implementation for demonstration
+            return self._mock_get_stock_chart(symbol, interval, range_period)
+            
+        except Exception as e:
+            logger.error(f"Error fetching stock chart for {symbol}: {str(e)}")
+            return {}
+    
+    def get_stock_insights(self, symbol: str) -> Dict:
+        """
+        Get stock insights
+        
+        Args:
+            symbol: Stock symbol
+            
+        Returns:
+            Stock insights data
+        """
+        logger.info(f"Fetching stock insights for {symbol}")
+        
+        try:
+            # Mock implementation for demonstration
+            return self._mock_get_stock_insights(symbol)
+            
+        except Exception as e:
+            logger.error(f"Error fetching stock insights for {symbol}: {str(e)}")
+            return {}
+    
+    def _mock_get_stock_profile(self, symbol: str) -> Dict:
+        """Mock implementation of get_stock_profile for demonstration"""
+        retail_profiles = {
+            "WMT": {
+                "name": "Walmart Inc.",
+                "sector": "Consumer Defensive",
+                "industry": "Discount Stores",
+                "employees": 2300000,
+                "website": "https://www.walmart.com"
+            },
+            "AMZN": {
+                "name": "Amazon.com, Inc.",
+                "sector": "Consumer Cyclical",
+                "industry": "Internet Retail",
+                "employees": 1541000,
+                "website": "https://www.amazon.com"
+            },
+            "TGT": {
+                "name": "Target Corporation",
+                "sector": "Consumer Defensive",
+                "industry": "Discount Stores",
+                "employees": 409000,
+                "website": "https://www.target.com"
+            }
+        }
+        
+        # Return mock data or empty dict if symbol not found
+        return {"quoteSummary": {"result": [{"summaryProfile": retail_profiles.get(symbol, {})}]}}
+    
+    def _mock_get_stock_chart(self, symbol: str, interval: str, range_period: str) -> Dict:
+        """Mock implementation of get_stock_chart for demonstration"""
+        # Generate mock time series data
+        now = datetime.now()
+        timestamps = []
+        closes = []
+        volumes = []
+        
+        # Number of data points based on interval and range
+        if interval == "1d" and range_period == "3mo":
+            days = 90
+        else:
+            days = 30  # Default
+        
+        for i in range(days):
+            date = now - timedelta(days=days-i)
+            timestamps.append(int(date.timestamp()))
+            
+            # Generate some realistic-looking price data with a trend and some noise
+            base_price = {"WMT": 150, "AMZN": 3500, "TGT": 250}.get(symbol, 100)
+            trend = i / days * 10  # Upward trend
+            noise = np.random.normal(0, 5)  # Random noise
+            price = base_price + trend + noise
+            
+            closes.append(round(price, 2))
+            volumes.append(int(np.random.normal(1000000, 200000)))
+        
+        return {
+            "chart": {
+                "result": [{
+                    "meta": {
+                        "symbol": symbol,
+                        "currency": "USD",
+                        "regularMarketPrice": closes[-1],
+                        "previousClose": closes[-2]
+                    },
+                    "timestamp": timestamps,
+                    "indicators": {
+                        "quote": [{
+                            "close": closes,
+                            "volume": volumes,
+                            "open": [c * 0.99 for c in closes],
+                            "high": [c * 1.01 for c in closes],
+                            "low": [c * 0.98 for c in closes]
+                        }]
+                    }
+                }]
+            }
+        }
+    
+    def _mock_get_stock_insights(self, symbol: str) -> Dict:
+        """Mock implementation of get_stock_insights for demonstration"""
+        insights = {
+            "WMT": {
+                "technicalEvents": {
+                    "shortTermOutlook": {"direction": "up", "score": 7},
+                    "intermediateTermOutlook": {"direction": "up", "score": 6},
+                    "longTermOutlook": {"direction": "up", "score": 8}
+                },
+                "companySnapshot": {
+                    "innovativeness": 6,
+                    "hiring": 7,
+                    "sustainability": 5
+                }
+            },
+            "AMZN": {
+                "technicalEvents": {
+                    "shortTermOutlook": {"direction": "up", "score": 8},
+                    "intermediateTermOutlook": {"direction": "up", "score": 9},
+                    "longTermOutlook": {"direction": "up", "score": 9}
+                },
+                "companySnapshot": {
+                    "innovativeness": 9,
+                    "hiring": 8,
+                    "sustainability": 6
+                }
+            },
+            "TGT": {
+                "technicalEvents": {
+                    "shortTermOutlook": {"direction": "neutral", "score": 5},
+                    "intermediateTermOutlook": {"direction": "up", "score": 6},
+                    "longTermOutlook": {"direction": "up", "score": 7}
+                },
+                "companySnapshot": {
+                    "innovativeness": 7,
+                    "hiring": 6,
+                    "sustainability": 8
+                }
+            }
+        }
+        
+        return {"finance": {"result": {"symbol": symbol, "instrumentInfo": insights.get(symbol, {})}}}
+
+
+class RetailMarketAPI(APIClient):
+    """Client for retail market data APIs"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Retail Market API client"""
+        super().__init__(
+            base_url="https://retail-market-api.example.com",  # Replace with actual API URL
+            api_key=api_key,
+            rate_limit=5,
+            rate_period=60
+        )
+    
+    def get_sales_data(self, product_category: str, date_range: str) -> Dict:
+        """
+        Get sales data for a product category
+        
+        Args:
+            product_category: Product category
+            date_range: Date range for data
+            
+        Returns:
+            Sales data
+        """
+        logger.info(f"Fetching sales data for {product_category} in {date_range}")
+        
+        try:
+            # Mock implementation for demonstration
+            return self._mock_get_sales_data(product_category, date_range)
+            
+        except Exception as e:
+            logger.error(f"Error fetching sales data for {product_category}: {str(e)}")
+            return {}
+    
+    def _mock_get_sales_data(self, product_category: str, date_range: str) -> Dict:
+        """Mock implementation of get_sales_data for demonstration"""
+        # Generate mock sales data
+        now = datetime.now()
+        dates = []
+        sales = []
+        
+        # Number of data points based on date range
+        if date_range == "1month":
+            days = 30
+        elif date_range == "3months":
+            days = 90
+        else:
+            days = 30  # Default
+        
+        # Base sales volume by category
+        base_sales = {
+            "electronics": 5000,
+            "clothing": 8000,
+            "groceries": 12000,
+            "home": 3000
+        }.get(product_category.lower(), 1000)
+        
+        for i in range(days):
+            date = now - timedelta(days=days-i)
+            dates.append(date.strftime("%Y-%m-%d"))
+            
+            # Generate realistic sales data with weekly patterns and some noise
+            day_of_week = date.weekday()
+            weekend_factor = 1.3 if day_of_week >= 5 else 1.0  # Higher sales on weekends
+            seasonal_factor = 1 + 0.1 * np.sin(2 * np.pi * i / days)  # Seasonal pattern
+            noise = np.random.normal(0, base_sales * 0.05)  # Random noise
+            
+            daily_sales = base_sales * weekend_factor * seasonal_factor + noise
+            sales.append(int(daily_sales))
+        
+        return {
+            "category": product_category,
+            "date_range": date_range,
+            "dates": dates,
+            "sales": sales
+        }
+
+
+class SupplyChainAPI(APIClient):
+    """Client for supply chain data APIs"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Supply Chain API client"""
+        super().__init__(
+            base_url="https://supply-chain-api.example.com",  # Replace with actual API URL
+            api_key=api_key,
+            rate_limit=5,
+            rate_period=60
+        )
+    
+    def get_shipping_data(self, origin: str, destination: str) -> Dict:
+        """
+        Get shipping data between locations
+        
+        Args:
+            origin: Origin location
+            destination: Destination location
+            
+        Returns:
+            Shipping data
+        """
+        logger.info(f"Fetching shipping data from {origin} to {destination}")
+        
+        try:
+            # Mock implementation for demonstration
+            return self._mock_get_shipping_data(origin, destination)
+            
+        except Exception as e:
+            logger.error(f"Error fetching shipping data: {str(e)}")
+            return {}
+    
+    def get_supplier_performance(self, supplier_id: str) -> Dict:
+        """
+        Get supplier performance metrics
+        
+        Args:
+            supplier_id: Supplier identifier
+            
+        Returns:
+            Supplier performance data
+        """
+        logger.info(f"Fetching performance data for supplier {supplier_id}")
+        
+        try:
+            # Mock implementation for demonstration
+            return self._mock_get_supplier_performance(supplier_id)
+            
+        except Exception as e:
+            logger.error(f"Error fetching supplier performance: {str(e)}")
+            return {}
+    
+    def _mock_get_shipping_data(self, origin: str, destination: str) -> Dict:
+        """Mock implementation of get_shipping_data for demonstration"""
+        # Common shipping routes and their characteristics
+        routes = {
+            ("China", "USA"): {"avg_time": 25, "cost_per_kg": 8.5, "reliability": 0.85},
+            ("USA", "Europe"): {"avg_time": 12, "cost_per_kg": 6.2, "reliability": 0.92},
+            ("Europe", "USA"): {"avg_time": 11, "cost_per_kg": 6.0, "reliability": 0.93},
+            ("USA", "Canada"): {"avg_time": 5, "cost_per_kg": 3.2, "reliability": 0.97},
+            ("Mexico", "USA"): {"avg_time": 7, "cost_per_kg": 4.1, "reliability": 0.90}
+        }
+        
+        # Get route data or generate default values
+        route_key = (origin, destination)
+        route_data = routes.get(route_key, {"avg_time": 15, "cost_per_kg": 5.0, "reliability": 0.85})
+        
+        # Add some random variation
+        avg_time = route_data["avg_time"] * np.random.normal(1, 0.05)
+        cost_per_kg = route_data["cost_per_kg"] * np.random.normal(1, 0.03)
+        reliability = min(1.0, max(0.5, route_data["reliability"] * np.random.normal(1, 0.02)))
+        
+        return {
+            "origin": origin,
+            "destination": destination,
+            "average_transit_time_days": round(avg_time, 1),
+            "cost_per_kg_usd": round(cost_per_kg, 2),
+            "on_time_delivery_rate": round(reliability, 2),
+            "carbon_footprint_kg_co2_per_ton": round(route_data.get("avg_time", 15) * 25, 0)
+        }
+    
+    def _mock_get_supplier_performance(self, supplier_id: str) -> Dict:
+        """Mock implementation of get_supplier_performance for demonstration"""
+        # Mock supplier database
+        suppliers = {
+            "SUP001": {"name": "Global Electronics Manufacturing", "category": "electronics", "tier": 1},
+            "SUP002": {"name": "Textile Solutions Inc.", "category": "clothing", "tier": 1},
+            "SUP003": {"name": "Fresh Foods Distributors", "category": "groceries", "tier": 1},
+            "SUP004": {"name": "Home Goods Manufacturing", "category": "home", "tier": 2},
+            "SUP005": {"name": "Component Suppliers Ltd.", "category": "electronics", "tier": 2}
+        }
+        
+        supplier = suppliers.get(supplier_id, {"name": "Unknown Supplier", "category": "other", "tier": 3})
+        
+        # Generate performance metrics based on supplier tier
+        # Tier 1 suppliers generally perform better
+        base_quality = 0.95 if supplier["tier"] == 1 else (0.90 if supplier["tier"] == 2 else 0.85)
+        base_on_time = 0.92 if supplier["tier"] == 1 else (0.87 if supplier["tier"] == 2 else 0.80)
+        base_cost = 1.0 if supplier["tier"] == 1 else (0.95 if supplier["tier"] == 2 else 0.90)
+        
+        # Add some random variation
+        quality = min(1.0, max(0.7, base_quality * np.random.normal(1, 0.03)))
+        on_time = min(1.0, max(0.6, base_on_time * np.random.normal(1, 0.04)))
+        cost_efficiency = min(1.2, max(0.8, base_cost * np.random.normal(1, 0.05)))
+        
+        return {
+            "supplier_id": supplier_id,
+            "supplier_name": supplier["name"],
+            "category": supplier["category"],
+            "tier": supplier["tier"],
+            "quality_score": round(quality, 2),
+            "on_time_delivery_rate": round(on_time, 2),
+            "cost_efficiency_score": round(cost_efficiency, 2),
+            "lead_time_days": round(10 * (3 - supplier["tier"]) * np.random.normal(1, 0.1), 1),
+            "defect_rate": round((1 - quality) * 100, 2)
+        }
+
+
+class EconomicDataAPI(APIClient):
+    """Client for economic data APIs"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Economic Data API client"""
+        super().__init__(
+            base_url="https://economic-data-api.example.com",  # Replace with actual API URL
+            api_key=api_key,
+            rate_limit=5,
+            rate_period=60
+        )
+    
+    def get_economic_indicators(self, country: str, indicators: List[str]) -> Dict:
+        """
+        Get economic indicators for a country
+        
+        Args:
+            country: Country code
+            indicators: List of indicator codes
+            
+        Returns:
+            Economic indicator data
+        """
+        logger.info(f"Fetching economic indicators for {country}: {indicators}")
+        
+        try:
+            # Mock implementation for demonstration
+            return self._mock_get_economic_indicators(country, indicators)
+            
+        except Exception as e:
+            logger.error(f"Error fetching economic indicators: {str(e)}")
+            return {}
+    
+    def _mock_get_economic_indicators(self, country: str, indicators: List[str]) -> Dict:
+        """Mock implementation of get_economic_indicators for demonstration"""
+        # Base values for different countries
+        country_data = {
+            "USA": {"gdp_growth": 2.3, "inflation": 2.1, "unemployment": 3.8, "consumer_confidence": 110},
+            "China": {"gdp_growth": 5.2, "inflation": 2.5, "unemployment": 4.1, "consumer_confidence": 115},
+            "Germany": {"gdp_growth": 1.1, "inflation": 1.8, "unemployment": 3.2, "consumer_confidence": 105},
+            "UK": {"gdp_growth": 1.4, "inflation": 2.2, "unemployment": 4.0, "consumer_confidence": 98},
+            "Japan": {"gdp_growth": 0.7, "inflation": 0.5, "unemployment": 2.6, "consumer_confidence": 95}
+        }
+        
+        # Get country data or use default values
+        data = country_data.get(country, {"gdp_growth": 2.0, "inflation": 2.0, "unemployment": 5.0, "consumer_confidence": 100})
+        
+        # Filter to requested indicators and add time series data
+        result = {"country": country, "indicators": {}}
+        
+        for indicator in indicators:
+            if indicator in data:
+                # Create time series for the past 12 months
+                time_series = []
+                base_value = data[indicator]
+                
+                for i in range(12):
+                    month = datetime.now() - timedelta(days=30*(12-i))
+                    # Add some trend and noise to the base value
+                    trend = (i - 6) * 0.05  # Slight trend over time
+                    noise = np.random.normal(0, base_value * 0.03)  # Random noise
+                    value = base_value + trend + noise
+                    
+                    time_series.append({
+                        "date": month.strftime("%Y-%m"),
+                        "value": round(value, 2)
+                    })
+                
+                result["indicators"][indicator] = {
+                    "current_value": round(time_series[-1]["value"], 2),
+                    "historical_data": time_series
+                }
+        
+        return result
+
+
+class DataTransformer:
+    """Transforms raw API data into a unified format for analysis"""
+    
+    def transform_stock_data(self, stock_data: Dict) -> pd.DataFrame:
+        """
+        Transform stock chart data into a DataFrame
+        
+        Args:
+            stock_data: Raw stock chart data from Yahoo Finance API
+            
+        Returns:
+            Pandas DataFrame with transformed data
+        """
+        try:
+            # Extract relevant data from the API response
+            result = stock_data.get("chart", {}).get("result", [{}])[0]
+            meta = result.get("meta", {})
+            timestamps = result.get("timestamp", [])
+            indicators = result.get("indicators", {})
+            quotes = indicators.get("quote", [{}])[0]
+            
+            # Create DataFrame
+            df = pd.DataFrame({
+                "timestamp": timestamps,
+                "open": quotes.get("open", []),
+                "high": quotes.get("high", []),
+                "low": quotes.get("low", []),
+                "close": quotes.get("close", []),
+                "volume": quotes.get("volume", [])
+            })
+            
+            # Convert timestamp to datetime
+            df["date"] = pd.to_datetime(df["timestamp"], unit="s")
+            
+            # Add symbol and currency information
+            df["symbol"] = meta.get("symbol", "")
+            df["currency"] = meta.get("currency", "USD")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error transforming stock data: {str(e)}")
+            return pd.DataFrame()
+    
+    def transform_sales_data(self, sales_data: Dict) -> pd.DataFrame:
+        """
+        Transform retail sales data into a DataFrame
+        
+        Args:
+            sales_data: Raw sales data from Retail Market API
+            
+        Returns:
+            Pandas DataFrame with transformed data
+        """
+        try:
+            # Create DataFrame from the sales data
+            df = pd.DataFrame({
+                "date": sales_data.get("dates", []),
+                "sales": sales_data.get("sales", [])
+            })
+            
+            # Convert date strings to datetime
+            df["date"] = pd.to_datetime(df["date"])
+            
+            # Add category information
+            df["category"] = sales_data.get("category", "")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error transforming sales data: {str(e)}")
+            return pd.DataFrame()
+    
+    def transform_shipping_data(self, shipping_data: Dict) -> pd.DataFrame:
+        """
+        Transform shipping data into a DataFrame
+        
+        Args:
+            shipping_data: Raw shipping data from Supply Chain API
+            
+        Returns:
+            Pandas DataFrame with transformed data
+        """
+        try:
+            # Create a single-row DataFrame from the shipping data
+            df = pd.DataFrame([{
+                "origin": shipping_data.get("origin", ""),
+                "destination": shipping_data.get("destination", ""),
+                "transit_time_days": shipping_data.get("average_transit_time_days", 0),
+                "cost_per_kg_usd": shipping_data.get("cost_per_kg_usd", 0),
+                "on_time_delivery_rate": shipping_data.get("on_time_delivery_rate", 0),
+                "carbon_footprint": shipping_data.get("carbon_footprint_kg_co2_per_ton", 0)
+            }])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error transforming shipping data: {str(e)}")
+            return pd.DataFrame()
+    
+    def transform_supplier_data(self, supplier_data: Dict) -> pd.DataFrame:
+        """
+        Transform supplier performance data into a DataFrame
+        
+        Args:
+            supplier_data: Raw supplier data from Supply Chain API
+            
+        Returns:
+            Pandas DataFrame with transformed data
+        """
+        try:
+            # Create a single-row DataFrame from the supplier data
+            df = pd.DataFrame([{
+                "supplier_id": supplier_data.get("supplier_id", ""),
+                "supplier_name": supplier_data.get("supplier_name", ""),
+                "category": supplier_data.get("category", ""),
+                "tier": supplier_data.get("tier", 0),
+                "quality_score": supplier_data.get("quality_score", 0),
+                "on_time_delivery_rate": supplier_data.get("on_time_delivery_rate", 0),
+                "cost_efficiency_score": supplier_data.get("cost_efficiency_score", 0),
+                "lead_time_days": supplier_data.get("lead_time_days", 0),
+                "defect_rate": supplier_data.get("defect_rate", 0)
+            }])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error transforming supplier data: {str(e)}")
+            return pd.DataFrame()
+    
+    def transform_economic_data(self, economic_data: Dict) -> pd.DataFrame:
+        """
+        Transform economic indicator data into a DataFrame
+        
+        Args:
+            economic_data: Raw economic data from Economic Data API
+            
+        Returns:
+            Pandas DataFrame with transformed data
+        """
+        try:
+            country = economic_data.get("country", "")
+            indicators = economic_data.get("indicators", {})
+            
+            # Create a list to hold all data points
+            data_points = []
+            
+            # Process each indicator
+            for indicator_name, indicator_data in indicators.items():
+                historical_data = indicator_data.get("historical_data", [])
+                
+                for data_point in historical_data:
+                    data_points.append({
+                        "country": country,
+                        "indicator": indicator_name,
+                        "date": data_point.get("date", ""),
+                        "value": data_point.get("value", 0)
+                    })
+            
+            # Create DataFrame
+            df = pd.DataFrame(data_points)
+            
+            # Convert date strings to datetime
+            if not df.empty and "date" in df.columns:
+                df["date"] = pd.to_datetime(df["date"])
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error transforming economic data: {str(e)}")
+            return pd.DataFrame()
+
+
+class DataStorage:
+    """Handles storage and retrieval of processed data"""
+    
+    def __init__(self, db_path: str = "retail_data.db"):
+        """
+        Initialize the data storage
+        
+        Args:
+            db_path: Path to the SQLite database file
+        """
+        self.db_path = db_path
+        self._initialize_database()
+        logger.info(f"Initialized data storage with database at {db_path}")
+    
+    def _initialize_database(self):
+        """Create database tables if they don't exist"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Create tables for different data types
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT,
+                date TEXT,
+                open REAL,
+                high REAL,
+                low REAL,
+                close REAL,
+                volume INTEGER,
+                currency TEXT,
+                timestamp INTEGER,
+                created_at TEXT
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sales_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT,
+                date TEXT,
+                sales INTEGER,
+                created_at TEXT
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS shipping_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                origin TEXT,
+                destination TEXT,
+                transit_time_days REAL,
+                cost_per_kg_usd REAL,
+                on_time_delivery_rate REAL,
+                carbon_footprint REAL,
+                created_at TEXT
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS supplier_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplier_id TEXT,
+                supplier_name TEXT,
+                category TEXT,
+                tier INTEGER,
+                quality_score REAL,
+                on_time_delivery_rate REAL,
+                cost_efficiency_score REAL,
+                lead_time_days REAL,
+                defect_rate REAL,
+                created_at TEXT
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS economic_data (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                country TEXT,
+                indicator TEXT,
+                date TEXT,
+                value REAL,
+                created_at TEXT
+            )
+            ''')
+            
+            conn.commit()
+            conn.close()
+            
+        except Exception as e:
+            logger.error(f"Error initializing database: {str(e)}")
+    
+    def store_stock_data(self, df: pd.DataFrame):
+        """
+        Store stock data in the database
+        
+        Args:
+            df: DataFrame containing stock data
+        """
+        if df.empty:
+            logger.warning("Attempted to store empty stock data")
+            return
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Add creation timestamp
+            df["created_at"] = datetime.now().isoformat()
+            
+            # Store in database
+            df.to_sql("stock_data", conn, if_exists="append", index=False)
+            
+            conn.close()
+            logger.info(f"Stored {len(df)} stock data records")
+            
+        except Exception as e:
+            logger.error(f"Error storing stock data: {str(e)}")
+    
+    def store_sales_data(self, df: pd.DataFrame):
+        """
+        Store sales data in the database
+        
+        Args:
+            df: DataFrame containing sales data
+        """
+        if df.empty:
+            logger.warning("Attempted to store empty sales data")
+            return
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Add creation timestamp
+            df["created_at"] = datetime.now().isoformat()
+            
+            # Store in database
+            df.to_sql("sales_data", conn, if_exists="append", index=False)
+            
+            conn.close()
+            logger.info(f"Stored {len(df)} sales data records")
+            
+        except Exception as e:
+            logger.error(f"Error storing sales data: {str(e)}")
+    
+    def store_shipping_data(self, df: pd.DataFrame):
+        """
+        Store shipping data in the database
+        
+        Args:
+            df: DataFrame containing shipping data
+        """
+        if df.empty:
+            logger.warning("Attempted to store empty shipping data")
+            return
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Add creation timestamp
+            df["created_at"] = datetime.now().isoformat()
+            
+            # Store in database
+            df.to_sql("shipping_data", conn, if_exists="append", index=False)
+            
+            conn.close()
+            logger.info(f"Stored {len(df)} shipping data records")
+            
+        except Exception as e:
+            logger.error(f"Error storing shipping data: {str(e)}")
+    
+    def store_supplier_data(self, df: pd.DataFrame):
+        """
+        Store supplier data in the database
+        
+        Args:
+            df: DataFrame containing supplier data
+        """
+        if df.empty:
+            logger.warning("Attempted to store empty supplier data")
+            return
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Add creation timestamp
+            df["created_at"] = datetime.now().isoformat()
+            
+            # Store in database
+            df.to_sql("supplier_data", conn, if_exists="append", index=False)
+            
+            conn.close()
+            logger.info(f"Stored {len(df)} supplier data records")
+            
+        except Exception as e:
+            logger.error(f"Error storing supplier data: {str(e)}")
+    
+    def store_economic_data(self, df: pd.DataFrame):
+        """
+        Store economic data in the database
+        
+        Args:
+            df: DataFrame containing economic data
+        """
+        if df.empty:
+            logger.warning("Attempted to store empty economic data")
+            return
+        
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Add creation timestamp
+            df["created_at"] = datetime.now().isoformat()
+            
+            # Store in database
+            df.to_sql("economic_data", conn, if_exists="append", index=False)
+            
+            conn.close()
+            logger.info(f"Stored {len(df)} economic data records")
+            
+        except Exception as e:
+            logger.error(f"Error storing economic data: {str(e)}")
+    
+    def get_latest_data(self, table_name: str, limit: int = 100) -> pd.DataFrame:
+        """
+        Retrieve the latest data from a table
+        
+        Args:
+            table_name: Name of the table to query
+            limit: Maximum number of records to retrieve
+            
+        Returns:
+            DataFrame containing the latest data
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = f"SELECT * FROM {table_name} ORDER BY id DESC LIMIT {limit}"
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Retrieved {len(df)} records from {table_name}")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error retrieving data from {table_name}: {str(e)}")
+            return pd.DataFrame()
+    
+    def get_data_by_date_range(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
+        """
+        Retrieve data within a date range
+        
+        Args:
+            table_name: Name of the table to query
+            start_date: Start date in ISO format (YYYY-MM-DD)
+            end_date: End date in ISO format (YYYY-MM-DD)
+            
+        Returns:
+            DataFrame containing the data within the date range
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            query = f"SELECT * FROM {table_name} WHERE date BETWEEN '{start_date}' AND '{end_date}'"
+            df = pd.read_sql_query(query, conn)
+            
+            conn.close()
+            logger.info(f"Retrieved {len(df)} records from {table_name} between {start_date} and {end_date}")
+            
+            return df
+            
+        except Exception as e:
+            logger.error(f"Error retrieving data from {table_name} by date range: {str(e)}")
+            return pd.DataFrame()
+
+
+class DataExtractionAgent:
+    """
+    Main agent class for data extraction and transformation
+    
+    This agent coordinates the extraction of data from multiple sources,
+    transforms it into a unified format, and stores it for use by other agents.
+    """
+    
+    def __init__(self, config_path: Optional[str] = None):
+        """
+        Initialize the Data Extraction Agent
+        
+        Args:
+            config_path: Path to configuration file (optional)
+        """
+        # Load configuration if provided
+        self.config = self._load_config(config_path)
+        
+        # Initialize API clients
+        self.yahoo_finance_api = YahooFinanceAPI(api_key=self.config.get("yahoo_finance_api_key"))
+        self.retail_market_api = RetailMarketAPI(api_key=self.config.get("retail_market_api_key"))
+        self.supply_chain_api = SupplyChainAPI(api_key=self.config.get("supply_chain_api_key"))
+        self.economic_data_api = EconomicDataAPI(api_key=self.config.get("economic_data_api_key"))
+        
+        # Initialize data transformer
+        self.transformer = DataTransformer()
+        
+        # Initialize data storage
+        self.storage = DataStorage(db_path=self.config.get("db_path", "retail_data.db"))
+        
+        # Set up retail symbols to track
+        self.retail_symbols = self.config.get("retail_symbols", ["WMT", "TGT", "COST", "AMZN"])
+        
+        # Set up product categories to track
+        self.product_categories = self.config.get("product_categories", ["electronics", "clothing", "groceries", "home"])
+        
+        # Set up suppliers to track
+        self.suppliers = self.config.get("suppliers", ["SUP001", "SUP002", "SUP003", "SUP004", "SUP005"])
+        
+        # Set up shipping routes to track
+        self.shipping_routes = self.config.get("shipping_routes", [
+            {"origin": "China", "destination": "USA"},
+            {"origin": "USA", "destination": "Europe"},
+            {"origin": "Mexico", "destination": "USA"}
+        ])
+        
+        # Set up economic indicators to track
+        self.economic_indicators = self.config.get("economic_indicators", ["gdp_growth", "inflation", "unemployment", "consumer_confidence"])
+        
+        logger.info("Data Extraction Agent initialized")
+    
+    def _load_config(self, config_path: Optional[str]) -> Dict:
+        """
+        Load configuration from file
+        
+        Args:
+            config_path: Path to configuration file
+            
+        Returns:
+            Configuration dictionary
+        """
+        default_config = {
+            "yahoo_finance_api_key": None,
+            "retail_market_api_key": None,
+            "supply_chain_api_key": None,
+            "economic_data_api_key": None,
+            "db_path": "retail_data.db",
+            "retail_symbols": ["WMT", "TGT", "COST", "AMZN"],
+            "product_categories": ["electronics", "clothing", "groceries", "home"],
+            "suppliers": ["SUP001", "SUP002", "SUP003", "SUP004", "SUP005"],
+            "shipping_routes": [
+                {"origin": "China", "destination": "USA"},
+                {"origin": "USA", "destination": "Europe"},
+                {"origin": "Mexico", "destination": "USA"}
+            ],
+            "economic_indicators": ["gdp_growth", "inflation", "unemployment", "consumer_confidence"]
+        }
+        
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, "r") as f:
+                    config = json.load(f)
+                    # Update default config with loaded values
+                    default_config.update(config)
+                logger.info(f"Loaded configuration from {config_path}")
+            except Exception as e:
+                logger.error(f"Error loading configuration from {config_path}: {str(e)}")
+        
+        return default_config
+    
+    def extract_stock_data(self):
+        """Extract and store stock data for retail companies"""
+        logger.info("Starting extraction of stock data")
+        
+        for symbol in self.retail_symbols:
+            try:
+                # Get stock chart data
+                stock_data = self.yahoo_finance_api.get_stock_chart(symbol, interval="1d", range_period="3mo")
+                
+                # Transform data
+                df = self.transformer.transform_stock_data(stock_data)
+                
+                # Store data
+                if not df.empty:
+                    self.storage.store_stock_data(df)
+                
+            except Exception as e:
+                logger.error(f"Error processing stock data for {symbol}: {str(e)}")
+    
+    def extract_sales_data(self):
+        """Extract and store sales data for product categories"""
+        logger.info("Starting extraction of sales data")
+        
+        for category in self.product_categories:
+            try:
+                # Get sales data
+                sales_data = self.retail_market_api.get_sales_data(category, date_range="3months")
+                
+                # Transform data
+                df = self.transformer.transform_sales_data(sales_data)
+                
+                # Store data
+                if not df.empty:
+                    self.storage.store_sales_data(df)
+                
+            except Exception as e:
+                logger.error(f"Error processing sales data for {category}: {str(e)}")
+    
+    def extract_shipping_data(self):
+        """Extract and store shipping data for routes"""
+        logger.info("Starting extraction of shipping data")
+        
+        for route in self.shipping_routes:
+            try:
+                # Get shipping data
+                shipping_data = self.supply_chain_api.get_shipping_data(
+                    origin=route["origin"],
+                    destination=route["destination"]
+                )
+                
+                # Transform data
+                df = self.transformer.transform_shipping_data(shipping_data)
+                
+                # Store data
+                if not df.empty:
+                    self.storage.store_shipping_data(df)
+                
+            except Exception as e:
+                logger.error(f"Error processing shipping data for {route}: {str(e)}")
+    
+    def extract_supplier_data(self):
+        """Extract and store supplier performance data"""
+        logger.info("Starting extraction of supplier data")
+        
+        for supplier_id in self.suppliers:
+            try:
+                # Get supplier data
+                supplier_data = self.supply_chain_api.get_supplier_performance(supplier_id)
+                
+                # Transform data
+                df = self.transformer.transform_supplier_data(supplier_data)
+                
+                # Store data
+                if not df.empty:
+                    self.storage.store_supplier_data(df)
+                
+            except Exception as e:
+                logger.error(f"Error processing supplier data for {supplier_id}: {str(e)}")
+    
+    def extract_economic_data(self):
+        """Extract and store economic indicator data"""
+        logger.info("Starting extraction of economic data")
+        
+        countries = ["USA", "China", "Germany", "UK", "Japan"]
+        
+        for country in countries:
+            try:
+                # Get economic data
+                economic_data = self.economic_data_api.get_economic_indicators(
+                    country=country,
+                    indicators=self.economic_indicators
+                )
+                
+                # Transform data
+                df = self.transformer.transform_economic_data(economic_data)
+                
+                # Store data
+                if not df.empty:
+                    self.storage.store_economic_data(df)
+                
+            except Exception as e:
+                logger.error(f"Error processing economic data for {country}: {str(e)}")
+    
+    def extract_all_data(self):
+        """Extract and store all types of data"""
+        logger.info("Starting extraction of all data")
+        
+        self.extract_stock_data()
+        self.extract_sales_data()
+        self.extract_shipping_data()
+        self.extract_supplier_data()
+        self.extract_economic_data()
+        
+        logger.info("Completed extraction of all data")
+    
+    def get_data_for_analysis(self) -> Dict[str, pd.DataFrame]:
+        """
+        Retrieve the latest data for analysis
+        
+        Returns:
+            Dictionary of DataFrames containing the latest data for each type
+        """
+        logger.info("Retrieving data for analysis")
+        
+        data = {
+            "stock_data": self.storage.get_latest_data("stock_data"),
+            "sales_data": self.storage.get_latest_data("sales_data"),
+            "shipping_data": self.storage.get_latest_data("shipping_data"),
+            "supplier_data": self.storage.get_latest_data("supplier_data"),
+            "economic_data": self.storage.get_latest_data("economic_data")
+        }
+        
+        return data
+    
+    def run_scheduled_extraction(self, interval_seconds: int = 3600):
+        """
+        Run data extraction on a schedule
+        
+        Args:
+            interval_seconds: Interval between extractions in seconds
+        """
+        logger.info(f"Starting scheduled extraction every {interval_seconds} seconds")
+        
+        while True:
+            try:
+                self.extract_all_data()
+                logger.info(f"Sleeping for {interval_seconds} seconds")
+                time.sleep(interval_seconds)
+            except KeyboardInterrupt:
+                logger.info("Scheduled extraction stopped by user")
+                break
+            except Exception as e:
+                logger.error(f"Error in scheduled extraction: {str(e)}")
+                # Sleep for a shorter time before retrying
+                time.sleep(60)
+
+
+def main():
+    """Main function to run the Data Extraction Agent"""
+    try:
+        # Initialize the agent
+        agent = DataExtractionAgent()
+        
+        # Extract all data once
+        agent.extract_all_data()
+        
+        # Get the data for analysis
+        data = agent.get_data_for_analysis()
+        
+        # Print summary of extracted data
+        for data_type, df in data.items():
+            if not df.empty:
+                print(f"{data_type}: {len(df)} records")
+            else:
+                print(f"{data_type}: No data")
+        
+        print("\nData extraction completed successfully.")
+        print("The extracted data is stored in the database and ready for analysis.")
+        
+    except Exception as e:
+        logger.error(f"Error in main function: {str(e)}")
+        print(f"Error: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
