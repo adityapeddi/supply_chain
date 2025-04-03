@@ -1,0 +1,2020 @@
+#!/usr/bin/env python3
+"""
+Decision Optimization Agent
+
+This agent is responsible for:
+1. Making inventory optimization decisions based on insights from the EDA Agent
+2. Implementing multi-agent reinforcement learning for inventory management
+3. Generating optimal inventory policies for different product categories
+4. Providing actionable recommendations with quantitative targets
+
+Author: Aditya Peddi
+Date: March 31, 2025
+"""
+
+import os
+import sys
+import json
+import logging
+import sqlite3
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Union, Tuple
+from scipy.optimize import minimize
+import tensorflow as tf
+from tensorflow import keras
+from tensorflow.keras import layers
+import gym
+from gym import spaces
+import random
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler("decision_agent.log"),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("DecisionAgent")
+
+class InventoryEnvironment(gym.Env):
+    """
+    Reinforcement learning environment for inventory optimization
+    
+    This environment simulates inventory management decisions and their consequences,
+    allowing reinforcement learning agents to learn optimal inventory policies.
+    """
+    
+    def __init__(self, 
+                 sales_data: pd.DataFrame,
+                 supplier_data: pd.DataFrame,
+                 shipping_data: pd.DataFrame,
+                 config: Dict[str, Any] = None):
+        """
+        Initialize the inventory environment
+        
+        Args:
+            sales_data: DataFrame containing historical sales data
+            supplier_data: DataFrame containing supplier performance data
+            shipping_data: DataFrame containing shipping data
+            config: Configuration dictionary for environment parameters
+        """
+        super(InventoryEnvironment, self).__init__()
+        
+        # Store input data
+        self.sales_data = sales_data
+        self.supplier_data = supplier_data
+        self.shipping_data = shipping_data
+        
+        # Set default configuration
+        self.default_config = {
+            'holding_cost_rate': 0.02,  # 2% of product value per period
+            'stockout_cost_rate': 0.10,  # 10% of lost sales value
+            'order_cost_fixed': 100,    # Fixed cost per order
+            'order_cost_variable': 0.01, # Variable cost as percentage of order value
+            'lead_time_mean': 3,        # Mean lead time in periods
+            'lead_time_std': 1,         # Standard deviation of lead time
+            'demand_noise': 0.2,        # Noise in demand as fraction of mean
+            'max_inventory': 1000,      # Maximum inventory capacity
+            'max_order': 500,           # Maximum order size
+            'num_periods': 30,          # Number of periods in an episode
+            'num_products': 1,          # Number of products to manage
+        }
+        
+        # Update configuration with provided values
+        self.config = self.default_config.copy()
+        if config:
+            self.config.update(config)
+        
+        # Set up action and observation spaces
+        self.action_space = spaces.Box(
+            low=0, 
+            high=self.config['max_order'],
+            shape=(self.config['num_products'],),
+            dtype=np.float32
+        )
+        
+        # Observation: [inventory_level, pending_orders, last_demand, day_of_week, week_of_year]
+        self.observation_space = spaces.Box(
+            low=np.array([0, 0, 0, 0, 0] * self.config['num_products']),
+            high=np.array([
+                self.config['max_inventory'], 
+                self.config['max_order'] * 3,  # Maximum pending orders
+                self.config['max_inventory'],  # Maximum demand
+                6,  # Day of week (0-6)
+                51  # Week of year (0-51)
+            ] * self.config['num_products']),
+            dtype=np.float32
+        )
+        
+        # Initialize state variables
+        self.reset()
+        
+        logger.info("Initialized inventory environment")
+    
+    def reset(self):
+        """
+        Reset the environment to initial state
+        
+        Returns:
+            Initial observation
+        """
+        # Initialize inventory levels
+        self.inventory = np.zeros(self.config['num_products'])
+        
+        # Initialize pending orders (orders placed but not yet received)
+        # List of (product_idx, quantity, periods_remaining) tuples
+        self.pending_orders = []
+        
+        # Initialize current period
+        self.current_period = 0
+        
+        # Initialize current date (for seasonal patterns)
+        self.current_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        # Initialize demand history
+        self.demand_history = []
+        
+        # Generate demand forecast for the episode
+        self._generate_demand_forecast()
+        
+        # Get initial observation
+        observation = self._get_observation()
+        
+        return observation
+    
+    def _generate_demand_forecast(self):
+        """Generate demand forecast for the entire episode"""
+        self.demand_forecast = []
+        
+        # If we have sales data, use it to generate realistic demand patterns
+        if not self.sales_data.empty and 'date' in self.sales_data.columns and 'sales' in self.sales_data.columns:
+            # Group by date and calculate total sales per day
+            daily_sales = self.sales_data.groupby('date')['sales'].sum().reset_index()
+            daily_sales['date'] = pd.to_datetime(daily_sales['date'])
+            
+            # Sort by date
+            daily_sales = daily_sales.sort_values('date')
+            
+            # If we have enough data, sample a continuous sequence
+            if len(daily_sales) >= self.config['num_periods']:
+                start_idx = np.random.randint(0, len(daily_sales) - self.config['num_periods'])
+                sampled_sales = daily_sales.iloc[start_idx:start_idx + self.config['num_periods']]
+                
+                # Scale sales to reasonable inventory levels
+                max_sales = sampled_sales['sales'].max()
+                scale_factor = self.config['max_inventory'] / 4 / max_sales if max_sales > 0 else 1
+                
+                for _, row in sampled_sales.iterrows():
+                    # Add some noise to make it more challenging
+                    noise_factor = 1 + np.random.normal(0, self.config['demand_noise'])
+                    demand = max(0, row['sales'] * scale_factor * noise_factor)
+                    self.demand_forecast.append(demand)
+                    
+                # Update current date to match the start of the sampled period
+                self.current_date = sampled_sales['date'].iloc[0].to_pydatetime()
+                
+            else:
+                # Not enough data, generate synthetic demand
+                self._generate_synthetic_demand()
+        else:
+            # No sales data, generate synthetic demand
+            self._generate_synthetic_demand()
+    
+    def _generate_synthetic_demand(self):
+        """Generate synthetic demand when real data is not available"""
+        # Base demand
+        base_demand = self.config['max_inventory'] / 4
+        
+        for i in range(self.config['num_periods']):
+            # Calculate date-based factors
+            current_date = self.current_date + timedelta(days=i)
+            day_of_week = current_date.weekday()
+            
+            # Weekend effect: higher demand on weekends
+            day_factor = 1.3 if day_of_week >= 5 else 1.0
+            
+            # Seasonal effect: simple sine wave
+            week_of_year = current_date.isocalendar()[1]
+            seasonal_factor = 1 + 0.2 * np.sin(2 * np.pi * week_of_year / 52)
+            
+            # Random noise
+            noise_factor = 1 + np.random.normal(0, self.config['demand_noise'])
+            
+            # Calculate demand
+            demand = max(0, base_demand * day_factor * seasonal_factor * noise_factor)
+            self.demand_forecast.append(demand)
+    
+    def step(self, action):
+        """
+        Take a step in the environment by placing an order
+        
+        Args:
+            action: Order quantities for each product
+            
+        Returns:
+            observation: New state observation
+            reward: Reward for the action
+            done: Whether the episode is finished
+            info: Additional information
+        """
+        # Ensure action is within bounds
+        action = np.clip(action, 0, self.config['max_order'])
+        
+        # Process the action (place orders)
+        order_costs = self._place_orders(action)
+        
+        # Process pending orders (receive shipments)
+        self._receive_shipments()
+        
+        # Generate demand for the current period
+        demand = self._generate_demand()
+        
+        # Fulfill demand and calculate costs
+        fulfillment_costs = self._fulfill_demand(demand)
+        
+        # Calculate holding costs
+        holding_costs = self._calculate_holding_costs()
+        
+        # Calculate total costs and reward
+        total_costs = order_costs + fulfillment_costs + holding_costs
+        reward = -total_costs  # Negative costs as reward
+        
+        # Update current period
+        self.current_period += 1
+        
+        # Check if episode is done
+        done = self.current_period >= self.config['num_periods']
+        
+        # Get new observation
+        observation = self._get_observation()
+        
+        # Compile info dictionary
+        info = {
+            'demand': demand,
+            'order_costs': order_costs,
+            'fulfillment_costs': fulfillment_costs,
+            'holding_costs': holding_costs,
+            'total_costs': total_costs,
+            'inventory_levels': self.inventory.copy(),
+            'pending_orders': len(self.pending_orders)
+        }
+        
+        return observation, reward, done, info
+    
+    def _place_orders(self, order_quantities):
+        """
+        Place orders for products
+        
+        Args:
+            order_quantities: Quantities to order for each product
+            
+        Returns:
+            Total order costs
+        """
+        total_order_costs = 0
+        
+        for product_idx, quantity in enumerate(order_quantities):
+            if quantity > 0:
+                # Calculate order costs
+                fixed_cost = self.config['order_cost_fixed']
+                variable_cost = quantity * self.config['order_cost_variable']
+                order_cost = fixed_cost + variable_cost
+                total_order_costs += order_cost
+                
+                # Determine lead time based on supplier data
+                lead_time = self._determine_lead_time(product_idx)
+                
+                # Add to pending orders
+                self.pending_orders.append((product_idx, quantity, lead_time))
+                
+                logger.debug(f"Placed order for product {product_idx}: {quantity} units, lead time: {lead_time} periods")
+        
+        return total_order_costs
+    
+    def _determine_lead_time(self, product_idx):
+        """
+        Determine lead time for an order based on supplier and shipping data
+        
+        Args:
+            product_idx: Index of the product
+            
+        Returns:
+            Lead time in periods
+        """
+        # Default lead time distribution
+        mean_lead_time = self.config['lead_time_mean']
+        std_lead_time = self.config['lead_time_std']
+        
+        # If we have supplier data, use it to determine lead time
+        if not self.supplier_data.empty and 'lead_time_days' in self.supplier_data.columns:
+            # For simplicity, use the first supplier's lead time
+            # In a real implementation, would match product to supplier
+            if len(self.supplier_data) > 0:
+                supplier_lead_time = self.supplier_data['lead_time_days'].iloc[0]
+                if not pd.isna(supplier_lead_time):
+                    mean_lead_time = supplier_lead_time / 2  # Convert days to periods (assuming 2 days per period)
+        
+        # If we have shipping data, adjust lead time based on transit time
+        if not self.shipping_data.empty and 'transit_time_days' in self.shipping_data.columns:
+            # For simplicity, use the first shipping route's transit time
+            if len(self.shipping_data) > 0:
+                transit_time = self.shipping_data['transit_time_days'].iloc[0]
+                if not pd.isna(transit_time):
+                    mean_lead_time += transit_time / 2  # Convert days to periods
+        
+        # Generate lead time with some randomness
+        lead_time = int(max(1, np.random.normal(mean_lead_time, std_lead_time)))
+        
+        return lead_time
+    
+    def _receive_shipments(self):
+        """Process pending orders and receive shipments"""
+        new_pending_orders = []
+        
+        for product_idx, quantity, periods_remaining in self.pending_orders:
+            if periods_remaining <= 1:
+                # Order has arrived, add to inventory
+                self.inventory[product_idx] += quantity
+                logger.debug(f"Received shipment for product {product_idx}: {quantity} units")
+            else:
+                # Order still in transit
+                new_pending_orders.append((product_idx, quantity, periods_remaining - 1))
+        
+        self.pending_orders = new_pending_orders
+    
+    def _generate_demand(self):
+        """
+        Generate demand for the current period
+        
+        Returns:
+            Array of demand quantities for each product
+        """
+        if self.current_period < len(self.demand_forecast):
+            # Use pre-generated forecast
+            base_demand = self.demand_forecast[self.current_period]
+        else:
+            # Fallback if we somehow exceed the forecast length
+            base_demand = self.config['max_inventory'] / 4
+        
+        # For multi-product case, distribute demand across products
+        # For simplicity, equal distribution with some randomness
+        if self.config['num_products'] > 1:
+            product_weights = np.random.dirichlet(np.ones(self.config['num_products']))
+            demand = base_demand * product_weights
+        else:
+            demand = np.array([base_demand])
+        
+        # Store demand in history
+        self.demand_history.append(demand)
+        
+        return demand
+    
+    def _fulfill_demand(self, demand):
+        """
+        Fulfill customer demand from inventory
+        
+        Args:
+            demand: Array of demand quantities for each product
+            
+        Returns:
+            Total fulfillment costs (primarily stockout costs)
+        """
+        total_fulfillment_costs = 0
+        
+        for product_idx, product_demand in enumerate(demand):
+            # Determine how much demand can be fulfilled
+            fulfilled_demand = min(product_demand, self.inventory[product_idx])
+            unfulfilled_demand = product_demand - fulfilled_demand
+            
+            # Update inventory
+            self.inventory[product_idx] -= fulfilled_demand
+            
+            # Calculate stockout costs for unfulfilled demand
+            if unfulfilled_demand > 0:
+                stockout_cost = unfulfilled_demand * self.config['stockout_cost_rate']
+                total_fulfillment_costs += stockout_cost
+                logger.debug(f"Stockout for product {product_idx}: {unfulfilled_demand} units, cost: {stockout_cost}")
+        
+        return total_fulfillment_costs
+    
+    def _calculate_holding_costs(self):
+        """
+        Calculate inventory holding costs
+        
+        Returns:
+            Total holding costs
+        """
+        total_holding_costs = 0
+        
+        for product_idx, inventory_level in enumerate(self.inventory):
+            holding_cost = inventory_level * self.config['holding_cost_rate']
+            total_holding_costs += holding_cost
+        
+        return total_holding_costs
+    
+    def _get_observation(self):
+        """
+        Get the current state observation
+        
+        Returns:
+            Observation array
+        """
+        observation = []
+        
+        # Current date information
+        current_date = self.current_date + timedelta(days=self.current_period)
+        day_of_week = current_date.weekday()
+        week_of_year = current_date.isocalendar()[1] - 1  # 0-51
+        
+        for product_idx in range(self.config['num_products']):
+            # Current inventory level
+            observation.append(self.inventory[product_idx])
+            
+            # Total pending order quantity for this product
+            pending_quantity = sum(qty for p_idx, qty, _ in self.pending_orders if p_idx == product_idx)
+            observation.append(pending_quantity)
+            
+            # Last observed demand (or 0 if no history)
+            last_demand = self.demand_history[-1][product_idx] if self.demand_history else 0
+            observation.append(last_demand)
+            
+            # Day of week and week of year (for seasonality)
+            observation.append(day_of_week)
+            observation.append(week_of_year)
+        
+        return np.array(observation, dtype=np.float32)
+    
+    def render(self, mode='human'):
+        """
+        Render the environment state
+        
+        Args:
+            mode: Rendering mode
+        """
+        if mode == 'human':
+            print(f"Period: {self.current_period}/{self.config['num_periods']}")
+            print(f"Date: {self.current_date + timedelta(days=self.current_period)}")
+            print(f"Inventory levels: {self.inventory}")
+            print(f"Pending orders: {len(self.pending_orders)}")
+            if self.demand_history:
+                print(f"Last demand: {self.demand_history[-1]}")
+            print("---")
+
+
+class DQNAgent:
+    """
+    Deep Q-Network agent for inventory optimization
+    
+    This agent learns optimal inventory policies using deep reinforcement learning.
+    """
+    
+    def __init__(self, 
+                 state_size: int,
+                 action_size: int,
+                 config: Dict[str, Any] = None):
+        """
+        Initialize the DQN agent
+        
+        Args:
+            state_size: Dimension of state space
+            action_size: Dimension of action space
+            config: Configuration dictionary for agent parameters
+        """
+        # Set default configuration
+        self.default_config = {
+            'learning_rate': 0.001,
+            'gamma': 0.95,          # Discount factor
+            'epsilon': 1.0,         # Exploration rate
+            'epsilon_min': 0.01,
+            'epsilon_decay': 0.995,
+            'batch_size': 32,
+            'memory_size': 10000,
+            'target_update_freq': 10  # Episodes between target network updates
+        }
+        
+        # Update configuration with provided values
+        self.config = self.default_config.copy()
+        if config:
+            self.config.update(config)
+        
+        self.state_size = state_size
+        self.action_size = action_size
+        
+        # Initialize experience replay memory
+        self.memory = []
+        self.memory_size = self.config['memory_size']
+        
+        # Initialize epsilon for exploration
+        self.epsilon = self.config['epsilon']
+        
+        # Build models
+        self.model = self._build_model()
+        self.target_model = self._build_model()
+        self.update_target_model()
+        
+        logger.info("Initialized DQN agent")
+    
+    def _build_model(self):
+        """
+        Build a neural network model for Q-function approximation
+        
+        Returns:
+            Keras model
+        """
+        model = keras.Sequential([
+            layers.Dense(24, input_dim=self.state_size, activation='relu'),
+            layers.Dense(24, activation='relu'),
+            layers.Dense(self.action_size, activation='linear')
+        ])
+        
+        model.compile(loss='mse', optimizer=keras.optimizers.Adam(learning_rate=self.config['learning_rate']))
+        
+        return model
+    
+    def update_target_model(self):
+        """Update target model with weights from main model"""
+        self.target_model.set_weights(self.model.get_weights())
+    
+    def remember(self, state, action, reward, next_state, done):
+        """
+        Store experience in replay memory
+        
+        Args:
+            state: Current state
+            action: Action taken
+            reward: Reward received
+            next_state: Next state
+            done: Whether episode is done
+        """
+        self.memory.append((state, action, reward, next_state, done))
+        if len(self.memory) > self.memory_size:
+            self.memory.pop(0)
+    
+    def act(self, state):
+        """
+        Choose an action based on current state
+        
+        Args:
+            state: Current state
+            
+        Returns:
+            Selected action
+        """
+        if np.random.rand() <= self.epsilon:
+            # Exploration: random action
+            return np.random.randint(0, self.action_size)
+        
+        # Exploitation: predict Q-values and choose best action
+        q_values = self.model.predict(state.reshape(1, -1))[0]
+        return np.argmax(q_values)
+    
+    def replay(self):
+        """Train the agent by replaying experiences"""
+        if len(self.memory) < self.config['batch_size']:
+            return
+        
+        # Sample batch from memory
+        minibatch = random.sample(self.memory, self.config['batch_size'])
+        
+        for state, action, reward, next_state, done in minibatch:
+            target = reward
+            if not done:
+                # Q-learning update rule
+                target = reward + self.config['gamma'] * np.amax(self.target_model.predict(next_state.reshape(1, -1))[0])
+            
+            # Update Q-value for the action taken
+            target_f = self.model.predict(state.reshape(1, -1))
+            target_f[0][action] = target
+            
+            # Train the model
+            self.model.fit(state.reshape(1, -1), target_f, epochs=1, verbose=0)
+        
+        # Decay epsilon
+        if self.epsilon > self.config['epsilon_min']:
+            self.epsilon *= self.config['epsilon_decay']
+    
+    def load(self, name):
+        """
+        Load model weights
+        
+        Args:
+            name: Path to model weights file
+        """
+        self.model.load_weights(name)
+    
+    def save(self, name):
+        """
+        Save model weights
+        
+        Args:
+            name: Path to save model weights
+        """
+        self.model.save_weights(name)
+
+
+class InventoryOptimizer:
+    """
+    Inventory optimization using traditional methods
+    
+    This class implements various inventory optimization algorithms
+    such as Economic Order Quantity (EOQ) and safety stock calculations.
+    """
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initialize the inventory optimizer
+        
+        Args:
+            config: Configuration dictionary for optimizer parameters
+        """
+        # Set default configuration
+        self.default_config = {
+            'holding_cost_rate': 0.02,  # 2% of product value per period
+            'ordering_cost': 100,       # Fixed cost per order
+            'service_level': 0.95,      # Target service level (95%)
+            'lead_time_mean': 3,        # Mean lead time in periods
+            'lead_time_std': 1,         # Standard deviation of lead time
+        }
+        
+        # Update configuration with provided values
+        self.config = self.default_config.copy()
+        if config:
+            self.config.update(config)
+        
+        logger.info("Initialized inventory optimizer")
+    
+    def calculate_eoq(self, annual_demand: float, unit_cost: float) -> float:
+        """
+        Calculate Economic Order Quantity
+        
+        Args:
+            annual_demand: Annual demand quantity
+            unit_cost: Cost per unit
+            
+        Returns:
+            Economic Order Quantity
+        """
+        try:
+            # EOQ formula: sqrt(2 * D * K / h)
+            # D = annual demand
+            # K = ordering cost
+            # h = holding cost per unit
+            holding_cost = unit_cost * self.config['holding_cost_rate']
+            ordering_cost = self.config['ordering_cost']
+            
+            eoq = np.sqrt(2 * annual_demand * ordering_cost / holding_cost)
+            
+            return eoq
+            
+        except Exception as e:
+            logger.error(f"Error calculating EOQ: {str(e)}")
+            return 0
+    
+    def calculate_reorder_point(self, lead_time_demand_mean: float, lead_time_demand_std: float) -> float:
+        """
+        Calculate reorder point with safety stock
+        
+        Args:
+            lead_time_demand_mean: Mean demand during lead time
+            lead_time_demand_std: Standard deviation of demand during lead time
+            
+        Returns:
+            Reorder point quantity
+        """
+        try:
+            # Calculate safety factor based on service level
+            service_level = self.config['service_level']
+            z_score = stats.norm.ppf(service_level)
+            
+            # Calculate safety stock
+            safety_stock = z_score * lead_time_demand_std
+            
+            # Reorder point = mean lead time demand + safety stock
+            reorder_point = lead_time_demand_mean + safety_stock
+            
+            return reorder_point
+            
+        except Exception as e:
+            logger.error(f"Error calculating reorder point: {str(e)}")
+            return 0
+    
+    def optimize_inventory_policy(self, 
+                                 demand_mean: float, 
+                                 demand_std: float,
+                                 unit_cost: float,
+                                 lead_time_mean: Optional[float] = None,
+                                 lead_time_std: Optional[float] = None) -> Dict[str, float]:
+        """
+        Optimize inventory policy parameters
+        
+        Args:
+            demand_mean: Mean demand per period
+            demand_std: Standard deviation of demand per period
+            unit_cost: Cost per unit
+            lead_time_mean: Mean lead time (optional, uses config value if not provided)
+            lead_time_std: Standard deviation of lead time (optional, uses config value if not provided)
+            
+        Returns:
+            Dictionary containing optimal policy parameters
+        """
+        try:
+            # Use provided lead time parameters or defaults from config
+            lt_mean = lead_time_mean if lead_time_mean is not None else self.config['lead_time_mean']
+            lt_std = lead_time_std if lead_time_std is not None else self.config['lead_time_std']
+            
+            # Calculate annual demand (assuming 365 periods per year)
+            annual_demand = demand_mean * 365
+            
+            # Calculate EOQ
+            eoq = self.calculate_eoq(annual_demand, unit_cost)
+            
+            # Calculate lead time demand parameters
+            lt_demand_mean = demand_mean * lt_mean
+            lt_demand_std = np.sqrt(lt_mean * demand_std**2 + demand_mean**2 * lt_std**2)
+            
+            # Calculate reorder point
+            reorder_point = self.calculate_reorder_point(lt_demand_mean, lt_demand_std)
+            
+            # Calculate safety stock
+            service_level = self.config['service_level']
+            z_score = stats.norm.ppf(service_level)
+            safety_stock = z_score * lt_demand_std
+            
+            # Calculate average inventory
+            avg_inventory = eoq / 2 + safety_stock
+            
+            # Calculate order frequency (orders per year)
+            order_frequency = annual_demand / eoq
+            
+            # Calculate total annual cost
+            holding_cost = avg_inventory * unit_cost * self.config['holding_cost_rate']
+            ordering_cost = order_frequency * self.config['ordering_cost']
+            total_cost = holding_cost + ordering_cost
+            
+            # Compile results
+            results = {
+                'eoq': eoq,
+                'reorder_point': reorder_point,
+                'safety_stock': safety_stock,
+                'avg_inventory': avg_inventory,
+                'order_frequency': order_frequency,
+                'total_annual_cost': total_cost,
+                'holding_cost': holding_cost,
+                'ordering_cost': ordering_cost
+            }
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error optimizing inventory policy: {str(e)}")
+            return {}
+
+
+class MultiProductOptimizer:
+    """
+    Multi-product inventory optimization
+    
+    This class handles optimization across multiple products with constraints
+    such as limited warehouse capacity or budget.
+    """
+    
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initialize the multi-product optimizer
+        
+        Args:
+            config: Configuration dictionary for optimizer parameters
+        """
+        # Set default configuration
+        self.default_config = {
+            'holding_cost_rate': 0.02,  # 2% of product value per period
+            'ordering_cost': 100,       # Fixed cost per order
+            'service_level': 0.95,      # Target service level (95%)
+            'warehouse_capacity': 10000, # Total warehouse capacity
+            'budget_constraint': 100000, # Budget constraint for inventory
+        }
+        
+        # Update configuration with provided values
+        self.config = self.default_config.copy()
+        if config:
+            self.config.update(config)
+        
+        # Initialize inventory optimizer for single-product calculations
+        self.inventory_optimizer = InventoryOptimizer(config)
+        
+        logger.info("Initialized multi-product optimizer")
+    
+    def optimize_multi_product(self, 
+                              products: List[Dict[str, Any]],
+                              constraints: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Optimize inventory policies for multiple products with constraints
+        
+        Args:
+            products: List of product dictionaries with demand and cost information
+            constraints: Dictionary of constraints (optional)
+            
+        Returns:
+            Dictionary containing optimal policies for each product
+        """
+        try:
+            # Set up constraints
+            if constraints is None:
+                constraints = {}
+            
+            warehouse_capacity = constraints.get('warehouse_capacity', self.config['warehouse_capacity'])
+            budget_constraint = constraints.get('budget_constraint', self.config['budget_constraint'])
+            
+            # First, calculate unconstrained optimal policies
+            unconstrained_policies = {}
+            total_space_required = 0
+            total_budget_required = 0
+            
+            for product in products:
+                product_id = product['id']
+                demand_mean = product['demand_mean']
+                demand_std = product.get('demand_std', demand_mean * 0.2)  # Default to 20% of mean if not provided
+                unit_cost = product['unit_cost']
+                unit_volume = product.get('unit_volume', 1.0)  # Default to 1.0 if not provided
+                
+                # Calculate optimal policy
+                policy = self.inventory_optimizer.optimize_inventory_policy(
+                    demand_mean=demand_mean,
+                    demand_std=demand_std,
+                    unit_cost=unit_cost,
+                    lead_time_mean=product.get('lead_time_mean'),
+                    lead_time_std=product.get('lead_time_std')
+                )
+                
+                unconstrained_policies[product_id] = policy
+                
+                # Calculate space and budget requirements
+                space_required = policy['avg_inventory'] * unit_volume
+                budget_required = policy['avg_inventory'] * unit_cost
+                
+                total_space_required += space_required
+                total_budget_required += budget_required
+            
+            # Check if constraints are violated
+            space_constrained = total_space_required > warehouse_capacity
+            budget_constrained = total_budget_required > budget_constraint
+            
+            # If no constraints are violated, return unconstrained policies
+            if not space_constrained and not budget_constrained:
+                return {
+                    'policies': unconstrained_policies,
+                    'total_space_required': total_space_required,
+                    'total_budget_required': total_budget_required,
+                    'constrained': False
+                }
+            
+            # Otherwise, solve constrained optimization problem
+            constrained_policies = self._solve_constrained_optimization(
+                products=products,
+                unconstrained_policies=unconstrained_policies,
+                warehouse_capacity=warehouse_capacity,
+                budget_constraint=budget_constraint
+            )
+            
+            # Calculate new totals
+            new_total_space = 0
+            new_total_budget = 0
+            
+            for product in products:
+                product_id = product['id']
+                unit_volume = product.get('unit_volume', 1.0)
+                unit_cost = product['unit_cost']
+                
+                policy = constrained_policies[product_id]
+                
+                new_total_space += policy['avg_inventory'] * unit_volume
+                new_total_budget += policy['avg_inventory'] * unit_cost
+            
+            return {
+                'policies': constrained_policies,
+                'total_space_required': new_total_space,
+                'total_budget_required': new_total_budget,
+                'constrained': True,
+                'space_constrained': space_constrained,
+                'budget_constrained': budget_constrained
+            }
+            
+        except Exception as e:
+            logger.error(f"Error optimizing multi-product inventory: {str(e)}")
+            return {}
+    
+    def _solve_constrained_optimization(self,
+                                       products: List[Dict[str, Any]],
+                                       unconstrained_policies: Dict[str, Dict[str, float]],
+                                       warehouse_capacity: float,
+                                       budget_constraint: float) -> Dict[str, Dict[str, float]]:
+        """
+        Solve constrained optimization problem for multi-product inventory
+        
+        Args:
+            products: List of product dictionaries
+            unconstrained_policies: Dictionary of unconstrained optimal policies
+            warehouse_capacity: Warehouse capacity constraint
+            budget_constraint: Budget constraint
+            
+        Returns:
+            Dictionary of constrained optimal policies
+        """
+        try:
+            # Extract product information
+            product_ids = [p['id'] for p in products]
+            unit_volumes = [p.get('unit_volume', 1.0) for p in products]
+            unit_costs = [p['unit_cost'] for p in products]
+            
+            # Extract unconstrained optimal values
+            unconstrained_eoqs = [unconstrained_policies[p_id]['eoq'] for p_id in product_ids]
+            unconstrained_safety_stocks = [unconstrained_policies[p_id]['safety_stock'] for p_id in product_ids]
+            
+            # Define objective function to minimize total cost
+            def objective(x):
+                total_cost = 0
+                for i, p_id in enumerate(product_ids):
+                    # Extract decision variables
+                    eoq_factor = x[i]  # Scaling factor for EOQ
+                    ss_factor = x[i + len(product_ids)]  # Scaling factor for safety stock
+                    
+                    # Calculate scaled EOQ and safety stock
+                    eoq = unconstrained_eoqs[i] * eoq_factor
+                    safety_stock = unconstrained_safety_stocks[i] * ss_factor
+                    
+                    # Calculate costs
+                    product = next(p for p in products if p['id'] == p_id)
+                    demand_mean = product['demand_mean']
+                    unit_cost = product['unit_cost']
+                    
+                    # Annual demand
+                    annual_demand = demand_mean * 365
+                    
+                    # Average inventory
+                    avg_inventory = eoq / 2 + safety_stock
+                    
+                    # Order frequency
+                    order_frequency = annual_demand / eoq if eoq > 0 else 0
+                    
+                    # Costs
+                    holding_cost = avg_inventory * unit_cost * self.config['holding_cost_rate']
+                    ordering_cost = order_frequency * self.config['ordering_cost']
+                    
+                    total_cost += holding_cost + ordering_cost
+                
+                return total_cost
+            
+            # Define constraints
+            def space_constraint(x):
+                total_space = 0
+                for i, p_id in enumerate(product_ids):
+                    eoq_factor = x[i]
+                    ss_factor = x[i + len(product_ids)]
+                    
+                    eoq = unconstrained_eoqs[i] * eoq_factor
+                    safety_stock = unconstrained_safety_stocks[i] * ss_factor
+                    
+                    avg_inventory = eoq / 2 + safety_stock
+                    total_space += avg_inventory * unit_volumes[i]
+                
+                # Return difference between capacity and required space
+                # Constraint is satisfied when this is >= 0
+                return warehouse_capacity - total_space
+            
+            def budget_constraint(x):
+                total_budget = 0
+                for i, p_id in enumerate(product_ids):
+                    eoq_factor = x[i]
+                    ss_factor = x[i + len(product_ids)]
+                    
+                    eoq = unconstrained_eoqs[i] * eoq_factor
+                    safety_stock = unconstrained_safety_stocks[i] * ss_factor
+                    
+                    avg_inventory = eoq / 2 + safety_stock
+                    total_budget += avg_inventory * unit_costs[i]
+                
+                # Return difference between budget and required budget
+                # Constraint is satisfied when this is >= 0
+                return budget_constraint - total_budget
+            
+            # Initial guess: scale down all products equally
+            n_products = len(product_ids)
+            x0 = np.ones(2 * n_products)  # [eoq_factors, ss_factors]
+            
+            # Define bounds: factors must be between 0.1 and 1.0
+            bounds = [(0.1, 1.0) for _ in range(2 * n_products)]
+            
+            # Define constraints
+            constraints = [
+                {'type': 'ineq', 'fun': space_constraint},
+                {'type': 'ineq', 'fun': budget_constraint}
+            ]
+            
+            # Solve optimization problem
+            result = minimize(
+                objective,
+                x0,
+                method='SLSQP',
+                bounds=bounds,
+                constraints=constraints,
+                options={'disp': True}
+            )
+            
+            # Extract solution
+            solution = result.x
+            eoq_factors = solution[:n_products]
+            ss_factors = solution[n_products:]
+            
+            # Create constrained policies
+            constrained_policies = {}
+            
+            for i, p_id in enumerate(product_ids):
+                # Get unconstrained policy
+                unconstrained = unconstrained_policies[p_id]
+                
+                # Scale EOQ and safety stock
+                eoq = unconstrained['eoq'] * eoq_factors[i]
+                safety_stock = unconstrained['safety_stock'] * ss_factors[i]
+                
+                # Recalculate other metrics
+                product = next(p for p in products if p['id'] == p_id)
+                demand_mean = product['demand_mean']
+                unit_cost = product['unit_cost']
+                
+                # Annual demand
+                annual_demand = demand_mean * 365
+                
+                # Average inventory
+                avg_inventory = eoq / 2 + safety_stock
+                
+                # Order frequency
+                order_frequency = annual_demand / eoq if eoq > 0 else 0
+                
+                # Costs
+                holding_cost = avg_inventory * unit_cost * self.config['holding_cost_rate']
+                ordering_cost = order_frequency * self.config['ordering_cost']
+                total_cost = holding_cost + ordering_cost
+                
+                # Create constrained policy
+                constrained_policies[p_id] = {
+                    'eoq': eoq,
+                    'reorder_point': unconstrained['reorder_point'],  # Keep same reorder point
+                    'safety_stock': safety_stock,
+                    'avg_inventory': avg_inventory,
+                    'order_frequency': order_frequency,
+                    'total_annual_cost': total_cost,
+                    'holding_cost': holding_cost,
+                    'ordering_cost': ordering_cost,
+                    'eoq_factor': eoq_factors[i],
+                    'ss_factor': ss_factors[i]
+                }
+            
+            return constrained_policies
+            
+        except Exception as e:
+            logger.error(f"Error solving constrained optimization: {str(e)}")
+            # Fallback: scale down all products equally to meet constraints
+            return self._simple_scaling_solution(
+                products=products,
+                unconstrained_policies=unconstrained_policies,
+                warehouse_capacity=warehouse_capacity,
+                budget_constraint=budget_constraint
+            )
+    
+    def _simple_scaling_solution(self,
+                                products: List[Dict[str, Any]],
+                                unconstrained_policies: Dict[str, Dict[str, float]],
+                                warehouse_capacity: float,
+                                budget_constraint: float) -> Dict[str, Dict[str, float]]:
+        """
+        Simple scaling solution for constrained optimization
+        
+        This is a fallback method that scales all products equally to meet constraints.
+        
+        Args:
+            products: List of product dictionaries
+            unconstrained_policies: Dictionary of unconstrained optimal policies
+            warehouse_capacity: Warehouse capacity constraint
+            budget_constraint: Budget constraint
+            
+        Returns:
+            Dictionary of constrained optimal policies
+        """
+        try:
+            # Calculate total space and budget required by unconstrained policies
+            total_space_required = 0
+            total_budget_required = 0
+            
+            for product in products:
+                product_id = product['id']
+                unit_volume = product.get('unit_volume', 1.0)
+                unit_cost = product['unit_cost']
+                
+                policy = unconstrained_policies[product_id]
+                
+                total_space_required += policy['avg_inventory'] * unit_volume
+                total_budget_required += policy['avg_inventory'] * unit_cost
+            
+            # Calculate scaling factors
+            space_factor = warehouse_capacity / total_space_required if total_space_required > warehouse_capacity else 1.0
+            budget_factor = budget_constraint / total_budget_required if total_budget_required > budget_constraint else 1.0
+            
+            # Use the more restrictive scaling factor
+            scaling_factor = min(space_factor, budget_factor)
+            
+            # Scale all policies
+            constrained_policies = {}
+            
+            for product in products:
+                product_id = product['id']
+                unconstrained = unconstrained_policies[product_id]
+                
+                # Scale inventory levels
+                eoq = unconstrained['eoq'] * scaling_factor
+                safety_stock = unconstrained['safety_stock'] * scaling_factor
+                avg_inventory = unconstrained['avg_inventory'] * scaling_factor
+                
+                # Recalculate costs
+                unit_cost = product['unit_cost']
+                demand_mean = product['demand_mean']
+                annual_demand = demand_mean * 365
+                
+                order_frequency = annual_demand / eoq if eoq > 0 else 0
+                holding_cost = avg_inventory * unit_cost * self.config['holding_cost_rate']
+                ordering_cost = order_frequency * self.config['ordering_cost']
+                total_cost = holding_cost + ordering_cost
+                
+                constrained_policies[product_id] = {
+                    'eoq': eoq,
+                    'reorder_point': unconstrained['reorder_point'],  # Keep same reorder point
+                    'safety_stock': safety_stock,
+                    'avg_inventory': avg_inventory,
+                    'order_frequency': order_frequency,
+                    'total_annual_cost': total_cost,
+                    'holding_cost': holding_cost,
+                    'ordering_cost': ordering_cost,
+                    'scaling_factor': scaling_factor
+                }
+            
+            return constrained_policies
+            
+        except Exception as e:
+            logger.error(f"Error in simple scaling solution: {str(e)}")
+            return unconstrained_policies  # Return unconstrained as last resort
+
+
+class DecisionOptimizationAgent:
+    """
+    Main agent class for decision optimization
+    
+    This agent coordinates the optimization of inventory decisions
+    based on insights from the EDA Agent.
+    """
+    
+    def __init__(self, db_path: str = "retail_data.db", output_dir: str = "optimization_results"):
+        """
+        Initialize the Decision Optimization Agent
+        
+        Args:
+            db_path: Path to the SQLite database file
+            output_dir: Directory to save optimization results
+        """
+        self.db_path = db_path
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Initialize optimizers
+        self.inventory_optimizer = InventoryOptimizer()
+        self.multi_product_optimizer = MultiProductOptimizer()
+        
+        # Initialize RL environment and agent
+        self.rl_environment = None
+        self.rl_agent = None
+        
+        logger.info("Decision Optimization Agent initialized")
+    
+    def load_data(self) -> Dict[str, pd.DataFrame]:
+        """
+        Load data from the database
+        
+        Returns:
+            Dictionary of DataFrames containing all data types
+        """
+        try:
+            conn = sqlite3.connect(self.db_path)
+            
+            # Load sales data
+            sales_df = pd.read_sql_query("SELECT * FROM sales_data", conn)
+            if 'date' in sales_df.columns:
+                sales_df['date'] = pd.to_datetime(sales_df['date'])
+            
+            # Load supplier data
+            supplier_df = pd.read_sql_query("SELECT * FROM supplier_data", conn)
+            
+            # Load shipping data
+            shipping_df = pd.read_sql_query("SELECT * FROM shipping_data", conn)
+            
+            # Load economic data
+            economic_df = pd.read_sql_query("SELECT * FROM economic_data", conn)
+            if 'date' in economic_df.columns:
+                economic_df['date'] = pd.to_datetime(economic_df['date'])
+            
+            conn.close()
+            
+            data = {
+                'sales_data': sales_df,
+                'supplier_data': supplier_df,
+                'shipping_data': shipping_df,
+                'economic_data': economic_df
+            }
+            
+            logger.info("Loaded data from database")
+            
+            return data
+            
+        except Exception as e:
+            logger.error(f"Error loading data: {str(e)}")
+            return {
+                'sales_data': pd.DataFrame(),
+                'supplier_data': pd.DataFrame(),
+                'shipping_data': pd.DataFrame(),
+                'economic_data': pd.DataFrame()
+            }
+    
+    def prepare_product_data(self, sales_df: pd.DataFrame) -> List[Dict[str, Any]]:
+        """
+        Prepare product data for optimization
+        
+        Args:
+            sales_df: DataFrame containing sales data
+            
+        Returns:
+            List of product dictionaries
+        """
+        try:
+            products = []
+            
+            if sales_df.empty or 'category' not in sales_df.columns:
+                logger.warning("Sales data is empty or missing category column")
+                return products
+            
+            # Group by category and calculate statistics
+            category_stats = sales_df.groupby('category').agg({
+                'sales': ['mean', 'std']
+            }).reset_index()
+            
+            category_stats.columns = ['category', 'demand_mean', 'demand_std']
+            
+            # Create product dictionaries
+            for _, row in category_stats.iterrows():
+                category = row['category']
+                demand_mean = row['demand_mean']
+                demand_std = row['demand_std']
+                
+                # Assign dummy unit costs based on category
+                # In a real implementation, would use actual product costs
+                unit_cost_map = {
+                    'electronics': 100,
+                    'clothing': 50,
+                    'groceries': 20,
+                    'home': 80
+                }
+                
+                unit_cost = unit_cost_map.get(category.lower(), 50)
+                
+                # Assign dummy unit volumes based on category
+                unit_volume_map = {
+                    'electronics': 2.0,
+                    'clothing': 1.0,
+                    'groceries': 1.5,
+                    'home': 3.0
+                }
+                
+                unit_volume = unit_volume_map.get(category.lower(), 1.0)
+                
+                products.append({
+                    'id': category,
+                    'name': category,
+                    'demand_mean': demand_mean,
+                    'demand_std': demand_std,
+                    'unit_cost': unit_cost,
+                    'unit_volume': unit_volume
+                })
+            
+            return products
+            
+        except Exception as e:
+            logger.error(f"Error preparing product data: {str(e)}")
+            return []
+    
+    def optimize_inventory_policies(self, products: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Optimize inventory policies for all products
+        
+        Args:
+            products: List of product dictionaries
+            
+        Returns:
+            Dictionary containing optimization results
+        """
+        try:
+            # Define constraints
+            constraints = {
+                'warehouse_capacity': 10000,  # Example capacity
+                'budget_constraint': 500000   # Example budget
+            }
+            
+            # Run multi-product optimization
+            optimization_results = self.multi_product_optimizer.optimize_multi_product(
+                products=products,
+                constraints=constraints
+            )
+            
+            # Save results
+            self._save_optimization_results(optimization_results)
+            
+            return optimization_results
+            
+        except Exception as e:
+            logger.error(f"Error optimizing inventory policies: {str(e)}")
+            return {}
+    
+    def _save_optimization_results(self, results: Dict[str, Any]):
+        """
+        Save optimization results to file
+        
+        Args:
+            results: Dictionary containing optimization results
+        """
+        try:
+            # Save as JSON
+            with open(os.path.join(self.output_dir, 'inventory_optimization_results.json'), 'w') as f:
+                # Convert any non-serializable objects to strings
+                serializable_results = self._make_serializable(results)
+                json.dump(serializable_results, f, indent=2)
+            
+            logger.info(f"Saved optimization results to {os.path.join(self.output_dir, 'inventory_optimization_results.json')}")
+            
+            # Generate a summary report
+            self._generate_optimization_report(results)
+            
+        except Exception as e:
+            logger.error(f"Error saving optimization results: {str(e)}")
+    
+    def _make_serializable(self, obj):
+        """
+        Convert non-serializable objects to serializable format
+        
+        Args:
+            obj: Object to convert
+            
+        Returns:
+            Serializable version of the object
+        """
+        if isinstance(obj, dict):
+            return {k: self._make_serializable(v) for k, v in obj.items()}
+        elif isinstance(obj, list):
+            return [self._make_serializable(item) for item in obj]
+        elif isinstance(obj, (np.int64, np.int32)):
+            return int(obj)
+        elif isinstance(obj, (np.float64, np.float32)):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        else:
+            return obj
+    
+    def _generate_optimization_report(self, results: Dict[str, Any]):
+        """
+        Generate a summary report from optimization results
+        
+        Args:
+            results: Dictionary containing optimization results
+        """
+        try:
+            report = []
+            
+            report.append("# Inventory Optimization Results")
+            report.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            # Add summary section
+            report.append("## Summary")
+            
+            if 'constrained' in results:
+                if results['constrained']:
+                    constraints = []
+                    if results.get('space_constrained', False):
+                        constraints.append("warehouse capacity")
+                    if results.get('budget_constrained', False):
+                        constraints.append("budget")
+                    
+                    constraint_str = " and ".join(constraints)
+                    report.append(f"Optimization was constrained by {constraint_str}.")
+                else:
+                    report.append("Optimization was unconstrained (all products at optimal levels).")
+            
+            if 'total_space_required' in results:
+                report.append(f"Total warehouse space required: {results['total_space_required']:.2f} cubic units")
+            
+            if 'total_budget_required' in results:
+                report.append(f"Total inventory budget required: ${results['total_budget_required']:.2f}")
+            
+            # Add policies section
+            if 'policies' in results:
+                report.append("\n## Optimal Inventory Policies")
+                
+                policies = results['policies']
+                
+                for product_id, policy in policies.items():
+                    report.append(f"\n### {product_id}")
+                    report.append(f"- Economic Order Quantity (EOQ): {policy['eoq']:.2f} units")
+                    report.append(f"- Reorder Point: {policy['reorder_point']:.2f} units")
+                    report.append(f"- Safety Stock: {policy['safety_stock']:.2f} units")
+                    report.append(f"- Average Inventory: {policy['avg_inventory']:.2f} units")
+                    report.append(f"- Order Frequency: {policy['order_frequency']:.2f} orders per year")
+                    report.append(f"- Total Annual Cost: ${policy['total_annual_cost']:.2f}")
+                    report.append(f"  - Holding Cost: ${policy['holding_cost']:.2f}")
+                    report.append(f"  - Ordering Cost: ${policy['ordering_cost']:.2f}")
+                    
+                    # Add scaling information if available
+                    if 'eoq_factor' in policy:
+                        report.append(f"- EOQ Scaling Factor: {policy['eoq_factor']:.2f}")
+                    if 'ss_factor' in policy:
+                        report.append(f"- Safety Stock Scaling Factor: {policy['ss_factor']:.2f}")
+                    if 'scaling_factor' in policy:
+                        report.append(f"- Overall Scaling Factor: {policy['scaling_factor']:.2f}")
+            
+            # Add recommendations section
+            report.append("\n## Implementation Recommendations")
+            
+            if 'policies' in results:
+                policies = results['policies']
+                
+                # General recommendations
+                report.append("\n### General Recommendations")
+                report.append("1. Implement a cycle counting program to maintain inventory accuracy.")
+                report.append("2. Establish clear reorder procedures based on the calculated reorder points.")
+                report.append("3. Monitor actual lead times and adjust safety stock levels accordingly.")
+                report.append("4. Review and update inventory policies quarterly based on changing demand patterns.")
+                
+                # Product-specific recommendations
+                report.append("\n### Product-Specific Recommendations")
+                
+                for product_id, policy in policies.items():
+                    eoq = policy['eoq']
+                    reorder_point = policy['reorder_point']
+                    safety_stock = policy['safety_stock']
+                    
+                    report.append(f"\n#### {product_id}")
+                    report.append(f"1. Place orders of {eoq:.0f} units when inventory drops to {reorder_point:.0f} units.")
+                    report.append(f"2. Maintain a minimum safety stock of {safety_stock:.0f} units.")
+                    
+                    # Add specific recommendations based on policy characteristics
+                    if 'scaling_factor' in policy and policy['scaling_factor'] < 0.8:
+                        report.append(f"3. Consider negotiating better terms with suppliers to reduce ordering costs.")
+                        report.append(f"4. Evaluate options for increasing warehouse space allocation for this product.")
+                    
+                    if policy['order_frequency'] > 12:
+                        report.append(f"3. Consider implementing vendor-managed inventory (VMI) due to high order frequency.")
+                    elif policy['order_frequency'] < 4:
+                        report.append(f"3. Negotiate volume discounts for large, infrequent orders.")
+            
+            # Write report to file
+            with open(os.path.join(self.output_dir, 'inventory_optimization_report.md'), 'w') as f:
+                f.write('\n'.join(report))
+            
+            logger.info(f"Generated optimization report at {os.path.join(self.output_dir, 'inventory_optimization_report.md')}")
+            
+            # Create visualizations
+            self._create_optimization_visualizations(results)
+            
+        except Exception as e:
+            logger.error(f"Error generating optimization report: {str(e)}")
+    
+    def _create_optimization_visualizations(self, results: Dict[str, Any]):
+        """
+        Create visualizations for optimization results
+        
+        Args:
+            results: Dictionary containing optimization results
+        """
+        try:
+            if 'policies' not in results:
+                return
+            
+            policies = results['policies']
+            
+            # Create bar chart of EOQ by product
+            plt.figure(figsize=(10, 6))
+            products = list(policies.keys())
+            eoqs = [policies[p]['eoq'] for p in products]
+            
+            plt.bar(products, eoqs, color='skyblue')
+            plt.title('Economic Order Quantity by Product')
+            plt.xlabel('Product')
+            plt.ylabel('EOQ (units)')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            plt.savefig(os.path.join(self.output_dir, 'eoq_by_product.png'), dpi=300)
+            plt.close()
+            
+            # Create bar chart of safety stock by product
+            plt.figure(figsize=(10, 6))
+            safety_stocks = [policies[p]['safety_stock'] for p in products]
+            
+            plt.bar(products, safety_stocks, color='salmon')
+            plt.title('Safety Stock by Product')
+            plt.xlabel('Product')
+            plt.ylabel('Safety Stock (units)')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            plt.savefig(os.path.join(self.output_dir, 'safety_stock_by_product.png'), dpi=300)
+            plt.close()
+            
+            # Create stacked bar chart of costs by product
+            plt.figure(figsize=(10, 6))
+            holding_costs = [policies[p]['holding_cost'] for p in products]
+            ordering_costs = [policies[p]['ordering_cost'] for p in products]
+            
+            plt.bar(products, holding_costs, label='Holding Cost', color='lightblue')
+            plt.bar(products, ordering_costs, bottom=holding_costs, label='Ordering Cost', color='lightcoral')
+            
+            plt.title('Annual Inventory Costs by Product')
+            plt.xlabel('Product')
+            plt.ylabel('Cost ($)')
+            plt.legend()
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            
+            plt.savefig(os.path.join(self.output_dir, 'costs_by_product.png'), dpi=300)
+            plt.close()
+            
+            # Create pie chart of total costs
+            plt.figure(figsize=(8, 8))
+            total_holding_cost = sum(policies[p]['holding_cost'] for p in products)
+            total_ordering_cost = sum(policies[p]['ordering_cost'] for p in products)
+            
+            plt.pie([total_holding_cost, total_ordering_cost], 
+                   labels=['Holding Cost', 'Ordering Cost'],
+                   autopct='%1.1f%%',
+                   colors=['lightblue', 'lightcoral'],
+                   startangle=90)
+            
+            plt.title('Distribution of Total Inventory Costs')
+            plt.axis('equal')
+            
+            plt.savefig(os.path.join(self.output_dir, 'cost_distribution.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error creating optimization visualizations: {str(e)}")
+    
+    def setup_rl_environment(self, sales_df: pd.DataFrame, supplier_df: pd.DataFrame, shipping_df: pd.DataFrame):
+        """
+        Set up reinforcement learning environment
+        
+        Args:
+            sales_df: DataFrame containing sales data
+            supplier_df: DataFrame containing supplier data
+            shipping_df: DataFrame containing shipping data
+        """
+        try:
+            # Configure environment
+            env_config = {
+                'num_products': 1,  # Start with single product for simplicity
+                'num_periods': 30,
+                'max_inventory': 1000,
+                'max_order': 500
+            }
+            
+            # Create environment
+            self.rl_environment = InventoryEnvironment(
+                sales_data=sales_df,
+                supplier_data=supplier_df,
+                shipping_data=shipping_df,
+                config=env_config
+            )
+            
+            # Get state and action dimensions
+            state_size = self.rl_environment.observation_space.shape[0]
+            action_size = 10  # Discretize action space for DQN
+            
+            # Configure agent
+            agent_config = {
+                'learning_rate': 0.001,
+                'gamma': 0.95,
+                'epsilon': 1.0,
+                'epsilon_min': 0.01,
+                'epsilon_decay': 0.995,
+                'batch_size': 32,
+                'memory_size': 10000
+            }
+            
+            # Create agent
+            self.rl_agent = DQNAgent(
+                state_size=state_size,
+                action_size=action_size,
+                config=agent_config
+            )
+            
+            logger.info("Set up RL environment and agent")
+            
+        except Exception as e:
+            logger.error(f"Error setting up RL environment: {str(e)}")
+    
+    def train_rl_agent(self, episodes: int = 100):
+        """
+        Train the reinforcement learning agent
+        
+        Args:
+            episodes: Number of episodes to train
+        """
+        try:
+            if self.rl_environment is None or self.rl_agent is None:
+                logger.error("RL environment or agent not initialized")
+                return
+            
+            # Training metrics
+            rewards_history = []
+            
+            for episode in range(episodes):
+                state = self.rl_environment.reset()
+                total_reward = 0
+                done = False
+                
+                while not done:
+                    # Choose action
+                    action = self.rl_agent.act(state)
+                    
+                    # Convert discrete action to continuous
+                    max_order = self.rl_environment.config['max_order']
+                    continuous_action = np.array([action / 9 * max_order])  # Scale to [0, max_order]
+                    
+                    # Take action
+                    next_state, reward, done, _ = self.rl_environment.step(continuous_action)
+                    
+                    # Remember experience
+                    self.rl_agent.remember(state, action, reward, next_state, done)
+                    
+                    # Update state and reward
+                    state = next_state
+                    total_reward += reward
+                    
+                    # Train agent
+                    self.rl_agent.replay()
+                
+                # Update target network periodically
+                if episode % self.rl_agent.config['target_update_freq'] == 0:
+                    self.rl_agent.update_target_model()
+                
+                # Record metrics
+                rewards_history.append(total_reward)
+                
+                # Log progress
+                if episode % 10 == 0:
+                    logger.info(f"Episode {episode}/{episodes}, Reward: {total_reward}, Epsilon: {self.rl_agent.epsilon:.4f}")
+            
+            # Save trained model
+            self.rl_agent.save(os.path.join(self.output_dir, 'dqn_model.h5'))
+            
+            # Plot training progress
+            plt.figure(figsize=(10, 6))
+            plt.plot(rewards_history)
+            plt.title('Training Rewards')
+            plt.xlabel('Episode')
+            plt.ylabel('Total Reward')
+            plt.grid(True)
+            plt.savefig(os.path.join(self.output_dir, 'rl_training_progress.png'), dpi=300)
+            plt.close()
+            
+            logger.info(f"Completed RL agent training ({episodes} episodes)")
+            
+        except Exception as e:
+            logger.error(f"Error training RL agent: {str(e)}")
+    
+    def evaluate_rl_agent(self, episodes: int = 10):
+        """
+        Evaluate the trained RL agent
+        
+        Args:
+            episodes: Number of episodes to evaluate
+            
+        Returns:
+            Dictionary containing evaluation results
+        """
+        try:
+            if self.rl_environment is None or self.rl_agent is None:
+                logger.error("RL environment or agent not initialized")
+                return {}
+            
+            # Set agent to evaluation mode (no exploration)
+            original_epsilon = self.rl_agent.epsilon
+            self.rl_agent.epsilon = 0
+            
+            # Evaluation metrics
+            rewards = []
+            inventory_levels = []
+            stockouts = []
+            order_quantities = []
+            
+            for episode in range(episodes):
+                state = self.rl_environment.reset()
+                episode_rewards = []
+                episode_inventory = []
+                episode_stockouts = 0
+                episode_orders = []
+                done = False
+                
+                while not done:
+                    # Choose action
+                    action = self.rl_agent.act(state)
+                    
+                    # Convert discrete action to continuous
+                    max_order = self.rl_environment.config['max_order']
+                    continuous_action = np.array([action / 9 * max_order])  # Scale to [0, max_order]
+                    
+                    # Take action
+                    next_state, reward, done, info = self.rl_environment.step(continuous_action)
+                    
+                    # Record metrics
+                    episode_rewards.append(reward)
+                    episode_inventory.append(info['inventory_levels'][0])
+                    episode_orders.append(continuous_action[0])
+                    
+                    # Check for stockouts
+                    if info['demand'][0] > info['inventory_levels'][0]:
+                        episode_stockouts += 1
+                    
+                    # Update state
+                    state = next_state
+                
+                # Store episode metrics
+                rewards.append(sum(episode_rewards))
+                inventory_levels.append(episode_inventory)
+                stockouts.append(episode_stockouts)
+                order_quantities.append(episode_orders)
+            
+            # Restore agent's exploration rate
+            self.rl_agent.epsilon = original_epsilon
+            
+            # Calculate average metrics
+            avg_reward = np.mean(rewards)
+            avg_stockouts = np.mean(stockouts)
+            
+            # Create visualizations
+            self._plot_rl_evaluation_results(inventory_levels, order_quantities)
+            
+            # Compile results
+            results = {
+                'avg_reward': avg_reward,
+                'avg_stockouts': avg_stockouts,
+                'rewards': rewards,
+                'stockouts': stockouts
+            }
+            
+            logger.info(f"Evaluated RL agent: Avg Reward = {avg_reward:.2f}, Avg Stockouts = {avg_stockouts:.2f}")
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error evaluating RL agent: {str(e)}")
+            return {}
+    
+    def _plot_rl_evaluation_results(self, inventory_levels: List[List[float]], order_quantities: List[List[float]]):
+        """
+        Plot RL evaluation results
+        
+        Args:
+            inventory_levels: List of inventory level histories for each episode
+            order_quantities: List of order quantity histories for each episode
+        """
+        try:
+            # Plot inventory levels for first episode
+            plt.figure(figsize=(10, 6))
+            plt.plot(inventory_levels[0])
+            plt.title('Inventory Levels (First Episode)')
+            plt.xlabel('Period')
+            plt.ylabel('Inventory Level')
+            plt.grid(True)
+            plt.savefig(os.path.join(self.output_dir, 'rl_inventory_levels.png'), dpi=300)
+            plt.close()
+            
+            # Plot order quantities for first episode
+            plt.figure(figsize=(10, 6))
+            plt.plot(order_quantities[0])
+            plt.title('Order Quantities (First Episode)')
+            plt.xlabel('Period')
+            plt.ylabel('Order Quantity')
+            plt.grid(True)
+            plt.savefig(os.path.join(self.output_dir, 'rl_order_quantities.png'), dpi=300)
+            plt.close()
+            
+            # Plot inventory vs orders
+            plt.figure(figsize=(10, 6))
+            plt.plot(inventory_levels[0], label='Inventory')
+            plt.plot(order_quantities[0], label='Orders')
+            plt.title('Inventory Levels vs Order Quantities')
+            plt.xlabel('Period')
+            plt.ylabel('Quantity')
+            plt.legend()
+            plt.grid(True)
+            plt.savefig(os.path.join(self.output_dir, 'rl_inventory_vs_orders.png'), dpi=300)
+            plt.close()
+            
+        except Exception as e:
+            logger.error(f"Error plotting RL evaluation results: {str(e)}")
+    
+    def generate_decision_recommendations(self) -> Dict[str, Any]:
+        """
+        Generate comprehensive decision recommendations
+        
+        Returns:
+            Dictionary containing recommendations
+        """
+        try:
+            # Load data
+            data = self.load_data()
+            
+            # Check if data is available
+            if all(df.empty for df in data.values()):
+                logger.warning("No data available for generating recommendations")
+                return {"error": "No data available"}
+            
+            # Prepare product data
+            products = self.prepare_product_data(data['sales_data'])
+            
+            # Run traditional optimization
+            optimization_results = self.optimize_inventory_policies(products)
+            
+            # Set up and train RL agent if data is sufficient
+            if not data['sales_data'].empty and len(data['sales_data']) >= 30:
+                self.setup_rl_environment(
+                    sales_df=data['sales_data'],
+                    supplier_df=data['supplier_data'],
+                    shipping_df=data['shipping_data']
+                )
+                
+                # Train RL agent
+                self.train_rl_agent(episodes=100)
+                
+                # Evaluate RL agent
+                rl_evaluation = self.evaluate_rl_agent(episodes=10)
+                
+                # Add RL results to optimization results
+                optimization_results['rl_evaluation'] = rl_evaluation
+            
+            # Generate final report
+            self._generate_final_report(optimization_results)
+            
+            return optimization_results
+            
+        except Exception as e:
+            logger.error(f"Error generating decision recommendations: {str(e)}")
+            return {"error": str(e)}
+    
+    def _generate_final_report(self, results: Dict[str, Any]):
+        """
+        Generate final comprehensive report
+        
+        Args:
+            results: Dictionary containing optimization results
+        """
+        try:
+            report = []
+            
+            report.append("# Inventory Decision Optimization Report")
+            report.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            
+            # Executive Summary
+            report.append("## Executive Summary")
+            report.append("This report presents optimal inventory management policies derived from advanced analytics and optimization techniques. The recommendations aim to minimize total inventory costs while maintaining adequate service levels.")
+            
+            if 'constrained' in results:
+                if results['constrained']:
+                    report.append("\nThe optimization was performed under resource constraints, resulting in adjusted policies that balance cost efficiency with operational limitations.")
+                else:
+                    report.append("\nThe optimization was performed without binding constraints, resulting in globally optimal inventory policies.")
+            
+            # Key Recommendations
+            report.append("\n## Key Recommendations")
+            
+            if 'policies' in results:
+                policies = results['policies']
+                
+                # Overall recommendations
+                total_annual_cost = sum(policy['total_annual_cost'] for policy in policies.values())
+                report.append(f"\n1. Implement the proposed inventory policies to achieve an estimated annual cost of ${total_annual_cost:.2f}.")
+                report.append("2. Establish a regular review process to monitor and adjust inventory parameters based on changing market conditions.")
+                report.append("3. Invest in inventory management software to automate order placement based on the calculated reorder points.")
+                report.append("4. Develop supplier relationships that support the optimal order frequencies identified in this analysis.")
+                
+                # Product-specific highlights
+                report.append("\n### Product Highlights")
+                
+                for product_id, policy in policies.items():
+                    report.append(f"\n**{product_id}**")
+                    report.append(f"- Order Quantity: {policy['eoq']:.0f} units")
+                    report.append(f"- Reorder Point: {policy['reorder_point']:.0f} units")
+                    report.append(f"- Safety Stock: {policy['safety_stock']:.0f} units")
+            
+            # Detailed Results
+            report.append("\n## Detailed Results")
+            report.append("\nPlease refer to the following files for detailed results:")
+            report.append(f"- [Inventory Optimization Report]({os.path.join(self.output_dir, 'inventory_optimization_report.md')})")
+            report.append(f"- [Inventory Optimization Results (JSON)]({os.path.join(self.output_dir, 'inventory_optimization_results.json')})")
+            
+            # Visualizations
+            report.append("\n## Visualizations")
+            report.append("\n### Traditional Optimization")
+            report.append(f"- [Economic Order Quantity by Product]({os.path.join(self.output_dir, 'eoq_by_product.png')})")
+            report.append(f"- [Safety Stock by Product]({os.path.join(self.output_dir, 'safety_stock_by_product.png')})")
+            report.append(f"- [Annual Inventory Costs by Product]({os.path.join(self.output_dir, 'costs_by_product.png')})")
+            report.append(f"- [Distribution of Total Inventory Costs]({os.path.join(self.output_dir, 'cost_distribution.png')})")
+            
+            # Add RL visualizations if available
+            if 'rl_evaluation' in results:
+                report.append("\n### Reinforcement Learning")
+                report.append(f"- [RL Training Progress]({os.path.join(self.output_dir, 'rl_training_progress.png')})")
+                report.append(f"- [RL Inventory Levels]({os.path.join(self.output_dir, 'rl_inventory_levels.png')})")
+                report.append(f"- [RL Order Quantities]({os.path.join(self.output_dir, 'rl_order_quantities.png')})")
+                report.append(f"- [RL Inventory vs Orders]({os.path.join(self.output_dir, 'rl_inventory_vs_orders.png')})")
+            
+            # Implementation Plan
+            report.append("\n## Implementation Plan")
+            report.append("\n### Phase 1: Preparation (Weeks 1-2)")
+            report.append("1. Validate optimization results with stakeholders")
+            report.append("2. Update inventory management systems with new parameters")
+            report.append("3. Train staff on new procedures")
+            
+            report.append("\n### Phase 2: Pilot Implementation (Weeks 3-6)")
+            report.append("1. Implement new policies for selected product categories")
+            report.append("2. Monitor performance closely")
+            report.append("3. Make adjustments as needed")
+            
+            report.append("\n### Phase 3: Full Implementation (Weeks 7-12)")
+            report.append("1. Roll out policies to all product categories")
+            report.append("2. Establish regular review process")
+            report.append("3. Document lessons learned")
+            
+            report.append("\n### Phase 4: Continuous Improvement (Ongoing)")
+            report.append("1. Regularly review and update inventory parameters")
+            report.append("2. Incorporate new data as it becomes available")
+            report.append("3. Explore advanced techniques such as machine learning for demand forecasting")
+            
+            # Conclusion
+            report.append("\n## Conclusion")
+            report.append("The inventory optimization analysis has identified significant opportunities for cost reduction while maintaining or improving service levels. By implementing the recommended policies, the organization can achieve better inventory performance, reduced costs, and improved customer satisfaction.")
+            
+            report.append("\nRegular review and adjustment of these policies is essential as market conditions, supplier performance, and customer demand patterns evolve over time.")
+            
+            # Write report to file
+            with open(os.path.join(self.output_dir, 'decision_optimization_report.md'), 'w') as f:
+                f.write('\n'.join(report))
+            
+            logger.info(f"Generated final report at {os.path.join(self.output_dir, 'decision_optimization_report.md')}")
+            
+        except Exception as e:
+            logger.error(f"Error generating final report: {str(e)}")
+
+
+def main():
+    """Main function to run the Decision Optimization Agent"""
+    try:
+        # Initialize the agent
+        agent = DecisionOptimizationAgent()
+        
+        # Generate recommendations
+        results = agent.generate_decision_recommendations()
+        
+        if 'error' in results:
+            print(f"Error: {results['error']}")
+        else:
+            print("\nDecision optimization completed successfully.")
+            print(f"Results saved to {agent.output_dir}")
+            print(f"Final report: {os.path.join(agent.output_dir, 'decision_optimization_report.md')}")
+            
+            # Print summary of results
+            if 'policies' in results:
+                policies = results['policies']
+                print("\nOptimal Inventory Policies:")
+                for product_id, policy in policies.items():
+                    print(f"  {product_id}:")
+                    print(f"    - Order Quantity: {policy['eoq']:.0f} units")
+                    print(f"    - Reorder Point: {policy['reorder_point']:.0f} units")
+                    print(f"    - Safety Stock: {policy['safety_stock']:.0f} units")
+        
+    except Exception as e:
+        logger.error(f"Error in main function: {str(e)}")
+        print(f"Error: {str(e)}")
+
+
+if __name__ == "__main__":
+    main()
