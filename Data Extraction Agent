@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """
-Data Extraction and Transformation Agent
+Supply Chain Data Extraction Agent
 
 This agent is responsible for:
-1. Extracting data from multiple API sources
+1. Extracting supply chain data from multiple real-time API sources
 2. Transforming the data into a unified format
 3. Storing the processed data for use by other agents
-4. Handling API rate limits, errors, and data validation
 
 Author: [Your Name]
-Date: March 31, 2025
+Date: April 03, 2025
 """
 
 import sys
@@ -22,10 +21,9 @@ import numpy as np
 from datetime import datetime, timedelta
 import requests
 from requests.exceptions import RequestException
-import aiohttp
-import asyncio
 import sqlite3
 from typing import Dict, List, Any, Optional, Union
+import random
 
 # Configure logging
 logging.basicConfig(
@@ -60,7 +58,7 @@ class APIClient:
         self.session = requests.Session()
         
         if api_key:
-            self.session.headers.update({"Authorization": f"Bearer {api_key}"})
+            self.session.headers.update({"X-Api-Key": api_key})
         
         logger.info(f"Initialized API client for {base_url}")
     
@@ -124,660 +122,437 @@ class APIClient:
         return {}  # Should never reach here due to raise in except block
 
 
-class YahooFinanceAPI(APIClient):
-    """Client for Yahoo Finance API"""
+class OpenSkyNetworkAPI(APIClient):
+    """Client for OpenSky Network API - provides global flight tracking data"""
     
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize Yahoo Finance API client"""
+    def __init__(self, username: Optional[str] = None, password: Optional[str] = None):
+        """Initialize OpenSky Network API client"""
         super().__init__(
-            base_url="https://yahoo-finance-api.example.com",  # Replace with actual API URL
-            api_key=api_key,
-            rate_limit=5,  # Adjust based on actual API limits
+            base_url="https://opensky-network.org/api",
+            rate_limit=10,  # Free tier limit
             rate_period=60
         )
+        self.auth = (username, password) if username and password else None
     
-    def get_stock_profile(self, symbol: str, region: str = "US", lang: str = "en-US") -> Dict:
+    def get_flights(self, begin_time: Optional[int] = None, end_time: Optional[int] = None,
+                    airport: Optional[str] = None) -> Dict:
         """
-        Get company profile information
+        Get flight data for supply chain transportation tracking
         
         Args:
-            symbol: Stock symbol
-            region: Region code
-            lang: Language code
+            begin_time: Start time as Unix timestamp (optional)
+            end_time: End time as Unix timestamp (optional)
+            airport: ICAO airport code (optional)
             
         Returns:
-            Company profile data
+            Flight data
         """
-        logger.info(f"Fetching stock profile for {symbol}")
-        
         try:
-            # In a real implementation, this would use the actual API
-            # For simulation, we'll use a mock implementation
+            # By default, get flights from the last hour
+            if not begin_time:
+                begin_time = int((datetime.now() - timedelta(hours=1)).timestamp())
+            if not end_time:
+                end_time = int(datetime.now().timestamp())
             
-            # This simulates calling: 
-            # self.request(f"v1/finance/stock/profile", params={"symbol": symbol, "region": region, "lang": lang})
+            logger.info(f"Fetching flights data from {datetime.fromtimestamp(begin_time)} to {datetime.fromtimestamp(end_time)}")
             
-            # Mock implementation for demonstration
-            return self._mock_get_stock_profile(symbol)
-            
-        except Exception as e:
-            logger.error(f"Error fetching stock profile for {symbol}: {str(e)}")
-            return {}
-    
-    def get_stock_chart(self, symbol: str, interval: str = "1d", range_period: str = "3mo") -> Dict:
-        """
-        Get stock chart data
-        
-        Args:
-            symbol: Stock symbol
-            interval: Data interval (1m, 5m, 1h, 1d, 1wk, 1mo)
-            range_period: Time range (1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max)
-            
-        Returns:
-            Stock chart data
-        """
-        logger.info(f"Fetching stock chart for {symbol} with interval {interval} and range {range_period}")
-        
-        try:
-            # Mock implementation for demonstration
-            return self._mock_get_stock_chart(symbol, interval, range_period)
-            
-        except Exception as e:
-            logger.error(f"Error fetching stock chart for {symbol}: {str(e)}")
-            return {}
-    
-    def get_stock_insights(self, symbol: str) -> Dict:
-        """
-        Get stock insights
-        
-        Args:
-            symbol: Stock symbol
-            
-        Returns:
-            Stock insights data
-        """
-        logger.info(f"Fetching stock insights for {symbol}")
-        
-        try:
-            # Mock implementation for demonstration
-            return self._mock_get_stock_insights(symbol)
-            
-        except Exception as e:
-            logger.error(f"Error fetching stock insights for {symbol}: {str(e)}")
-            return {}
-    
-    def _mock_get_stock_profile(self, symbol: str) -> Dict:
-        """Mock implementation of get_stock_profile for demonstration"""
-        retail_profiles = {
-            "WMT": {
-                "name": "Walmart Inc.",
-                "sector": "Consumer Defensive",
-                "industry": "Discount Stores",
-                "employees": 2300000,
-                "website": "https://www.walmart.com"
-            },
-            "AMZN": {
-                "name": "Amazon.com, Inc.",
-                "sector": "Consumer Cyclical",
-                "industry": "Internet Retail",
-                "employees": 1541000,
-                "website": "https://www.amazon.com"
-            },
-            "TGT": {
-                "name": "Target Corporation",
-                "sector": "Consumer Defensive",
-                "industry": "Discount Stores",
-                "employees": 409000,
-                "website": "https://www.target.com"
+            endpoint = "flights/all"
+            params = {
+                "begin": begin_time,
+                "end": end_time
             }
-        }
-        
-        # Return mock data or empty dict if symbol not found
-        return {"quoteSummary": {"result": [{"summaryProfile": retail_profiles.get(symbol, {})}]}}
+            
+            if airport:
+                endpoint = f"flights/arrival"
+                params["airport"] = airport
+            
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                params=params,
+                auth=self.auth
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Error fetching flights data: {str(e)}")
+            return {}
     
-    def _mock_get_stock_chart(self, symbol: str, interval: str, range_period: str) -> Dict:
-        """Mock implementation of get_stock_chart for demonstration"""
-        # Generate mock time series data
-        now = datetime.now()
-        timestamps = []
-        closes = []
-        volumes = []
+    def get_states(self) -> Dict:
+        """
+        Get current aircraft state vectors (positions)
         
-        # Number of data points based on interval and range
-        if interval == "1d" and range_period == "3mo":
-            days = 90
-        else:
-            days = 30  # Default
-        
-        for i in range(days):
-            date = now - timedelta(days=days-i)
-            timestamps.append(int(date.timestamp()))
+        Returns:
+            Current aircraft positions
+        """
+        try:
+            logger.info("Fetching current aircraft positions")
             
-            # Generate some realistic-looking price data with a trend and some noise
-            base_price = {"WMT": 150, "AMZN": 3500, "TGT": 250}.get(symbol, 100)
-            trend = i / days * 10  # Upward trend
-            noise = np.random.normal(0, 5)  # Random noise
-            price = base_price + trend + noise
+            endpoint = "states/all"
             
-            closes.append(round(price, 2))
-            volumes.append(int(np.random.normal(1000000, 200000)))
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                auth=self.auth
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Error fetching aircraft positions: {str(e)}")
+            return {}
+
+
+class ExchangeRatesAPI(APIClient):
+    """Client for Exchange Rates API - provides currency exchange data for global supply chains"""
+    
+    def __init__(self, api_key: Optional[str] = None):
+        """Initialize Exchange Rates API client"""
+        super().__init__(
+            base_url="https://api.exchangerate.host",
+            api_key=api_key,
+            rate_limit=10,
+            rate_period=60
+        )
+    
+    def get_latest_rates(self, base_currency: str = "USD") -> Dict:
+        """
+        Get latest exchange rates
         
-        return {
-            "chart": {
-                "result": [{
-                    "meta": {
-                        "symbol": symbol,
-                        "currency": "USD",
-                        "regularMarketPrice": closes[-1],
-                        "previousClose": closes[-2]
-                    },
-                    "timestamp": timestamps,
-                    "indicators": {
-                        "quote": [{
-                            "close": closes,
-                            "volume": volumes,
-                            "open": [c * 0.99 for c in closes],
-                            "high": [c * 1.01 for c in closes],
-                            "low": [c * 0.98 for c in closes]
-                        }]
-                    }
-                }]
+        Args:
+            base_currency: Base currency code
+            
+        Returns:
+            Exchange rate data
+        """
+        try:
+            logger.info(f"Fetching latest exchange rates with base {base_currency}")
+            
+            endpoint = "latest"
+            params = {
+                "base": base_currency
             }
-        }
+            
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                params=params
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Error fetching exchange rates: {str(e)}")
+            return {}
     
-    def _mock_get_stock_insights(self, symbol: str) -> Dict:
-        """Mock implementation of get_stock_insights for demonstration"""
-        insights = {
-            "WMT": {
-                "technicalEvents": {
-                    "shortTermOutlook": {"direction": "up", "score": 7},
-                    "intermediateTermOutlook": {"direction": "up", "score": 6},
-                    "longTermOutlook": {"direction": "up", "score": 8}
-                },
-                "companySnapshot": {
-                    "innovativeness": 6,
-                    "hiring": 7,
-                    "sustainability": 5
-                }
-            },
-            "AMZN": {
-                "technicalEvents": {
-                    "shortTermOutlook": {"direction": "up", "score": 8},
-                    "intermediateTermOutlook": {"direction": "up", "score": 9},
-                    "longTermOutlook": {"direction": "up", "score": 9}
-                },
-                "companySnapshot": {
-                    "innovativeness": 9,
-                    "hiring": 8,
-                    "sustainability": 6
-                }
-            },
-            "TGT": {
-                "technicalEvents": {
-                    "shortTermOutlook": {"direction": "neutral", "score": 5},
-                    "intermediateTermOutlook": {"direction": "up", "score": 6},
-                    "longTermOutlook": {"direction": "up", "score": 7}
-                },
-                "companySnapshot": {
-                    "innovativeness": 7,
-                    "hiring": 6,
-                    "sustainability": 8
-                }
+    def get_historical_rates(self, date: str, base_currency: str = "USD") -> Dict:
+        """
+        Get historical exchange rates
+        
+        Args:
+            date: Date in YYYY-MM-DD format
+            base_currency: Base currency code
+            
+        Returns:
+            Historical exchange rate data
+        """
+        try:
+            logger.info(f"Fetching historical exchange rates for {date} with base {base_currency}")
+            
+            endpoint = date
+            params = {
+                "base": base_currency
             }
-        }
-        
-        return {"finance": {"result": {"symbol": symbol, "instrumentInfo": insights.get(symbol, {})}}}
+            
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                params=params
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Error fetching historical exchange rates: {str(e)}")
+            return {}
 
 
-class RetailMarketAPI(APIClient):
-    """Client for retail market data APIs"""
+class WeatherAPI(APIClient):
+    """Client for OpenWeatherMap API - provides weather data for supply chain risk analysis"""
     
     def __init__(self, api_key: Optional[str] = None):
-        """Initialize Retail Market API client"""
+        """Initialize OpenWeatherMap API client"""
         super().__init__(
-            base_url="https://retail-market-api.example.com",  # Replace with actual API URL
+            base_url="https://api.openweathermap.org/data/2.5",
             api_key=api_key,
-            rate_limit=5,
+            rate_limit=10,
             rate_period=60
         )
     
-    def get_sales_data(self, product_category: str, date_range: str) -> Dict:
+    def get_current_weather(self, city: str, country_code: Optional[str] = None) -> Dict:
         """
-        Get sales data for a product category
+        Get current weather data for a location
         
         Args:
-            product_category: Product category
-            date_range: Date range for data
+            city: City name
+            country_code: ISO 3166 country code (optional)
             
         Returns:
-            Sales data
+            Current weather data
         """
-        logger.info(f"Fetching sales data for {product_category} in {date_range}")
-        
         try:
-            # Mock implementation for demonstration
-            return self._mock_get_sales_data(product_category, date_range)
-            
-        except Exception as e:
-            logger.error(f"Error fetching sales data for {product_category}: {str(e)}")
-            return {}
-    
-    def _mock_get_sales_data(self, product_category: str, date_range: str) -> Dict:
-        """Mock implementation of get_sales_data for demonstration"""
-        # Generate mock sales data
-        now = datetime.now()
-        dates = []
-        sales = []
-        
-        # Number of data points based on date range
-        if date_range == "1month":
-            days = 30
-        elif date_range == "3months":
-            days = 90
-        else:
-            days = 30  # Default
-        
-        # Base sales volume by category
-        base_sales = {
-            "electronics": 5000,
-            "clothing": 8000,
-            "groceries": 12000,
-            "home": 3000
-        }.get(product_category.lower(), 1000)
-        
-        for i in range(days):
-            date = now - timedelta(days=days-i)
-            dates.append(date.strftime("%Y-%m-%d"))
-            
-            # Generate realistic sales data with weekly patterns and some noise
-            day_of_week = date.weekday()
-            weekend_factor = 1.3 if day_of_week >= 5 else 1.0  # Higher sales on weekends
-            seasonal_factor = 1 + 0.1 * np.sin(2 * np.pi * i / days)  # Seasonal pattern
-            noise = np.random.normal(0, base_sales * 0.05)  # Random noise
-            
-            daily_sales = base_sales * weekend_factor * seasonal_factor + noise
-            sales.append(int(daily_sales))
-        
-        return {
-            "category": product_category,
-            "date_range": date_range,
-            "dates": dates,
-            "sales": sales
-        }
-
-
-class SupplyChainAPI(APIClient):
-    """Client for supply chain data APIs"""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize Supply Chain API client"""
-        super().__init__(
-            base_url="https://supply-chain-api.example.com",  # Replace with actual API URL
-            api_key=api_key,
-            rate_limit=5,
-            rate_period=60
-        )
-    
-    def get_shipping_data(self, origin: str, destination: str) -> Dict:
-        """
-        Get shipping data between locations
-        
-        Args:
-            origin: Origin location
-            destination: Destination location
-            
-        Returns:
-            Shipping data
-        """
-        logger.info(f"Fetching shipping data from {origin} to {destination}")
-        
-        try:
-            # Mock implementation for demonstration
-            return self._mock_get_shipping_data(origin, destination)
-            
-        except Exception as e:
-            logger.error(f"Error fetching shipping data: {str(e)}")
-            return {}
-    
-    def get_supplier_performance(self, supplier_id: str) -> Dict:
-        """
-        Get supplier performance metrics
-        
-        Args:
-            supplier_id: Supplier identifier
-            
-        Returns:
-            Supplier performance data
-        """
-        logger.info(f"Fetching performance data for supplier {supplier_id}")
-        
-        try:
-            # Mock implementation for demonstration
-            return self._mock_get_supplier_performance(supplier_id)
-            
-        except Exception as e:
-            logger.error(f"Error fetching supplier performance: {str(e)}")
-            return {}
-    
-    def _mock_get_shipping_data(self, origin: str, destination: str) -> Dict:
-        """Mock implementation of get_shipping_data for demonstration"""
-        # Common shipping routes and their characteristics
-        routes = {
-            ("China", "USA"): {"avg_time": 25, "cost_per_kg": 8.5, "reliability": 0.85},
-            ("USA", "Europe"): {"avg_time": 12, "cost_per_kg": 6.2, "reliability": 0.92},
-            ("Europe", "USA"): {"avg_time": 11, "cost_per_kg": 6.0, "reliability": 0.93},
-            ("USA", "Canada"): {"avg_time": 5, "cost_per_kg": 3.2, "reliability": 0.97},
-            ("Mexico", "USA"): {"avg_time": 7, "cost_per_kg": 4.1, "reliability": 0.90}
-        }
-        
-        # Get route data or generate default values
-        route_key = (origin, destination)
-        route_data = routes.get(route_key, {"avg_time": 15, "cost_per_kg": 5.0, "reliability": 0.85})
-        
-        # Add some random variation
-        avg_time = route_data["avg_time"] * np.random.normal(1, 0.05)
-        cost_per_kg = route_data["cost_per_kg"] * np.random.normal(1, 0.03)
-        reliability = min(1.0, max(0.5, route_data["reliability"] * np.random.normal(1, 0.02)))
-        
-        return {
-            "origin": origin,
-            "destination": destination,
-            "average_transit_time_days": round(avg_time, 1),
-            "cost_per_kg_usd": round(cost_per_kg, 2),
-            "on_time_delivery_rate": round(reliability, 2),
-            "carbon_footprint_kg_co2_per_ton": round(route_data.get("avg_time", 15) * 25, 0)
-        }
-    
-    def _mock_get_supplier_performance(self, supplier_id: str) -> Dict:
-        """Mock implementation of get_supplier_performance for demonstration"""
-        # Mock supplier database
-        suppliers = {
-            "SUP001": {"name": "Global Electronics Manufacturing", "category": "electronics", "tier": 1},
-            "SUP002": {"name": "Textile Solutions Inc.", "category": "clothing", "tier": 1},
-            "SUP003": {"name": "Fresh Foods Distributors", "category": "groceries", "tier": 1},
-            "SUP004": {"name": "Home Goods Manufacturing", "category": "home", "tier": 2},
-            "SUP005": {"name": "Component Suppliers Ltd.", "category": "electronics", "tier": 2}
-        }
-        
-        supplier = suppliers.get(supplier_id, {"name": "Unknown Supplier", "category": "other", "tier": 3})
-        
-        # Generate performance metrics based on supplier tier
-        # Tier 1 suppliers generally perform better
-        base_quality = 0.95 if supplier["tier"] == 1 else (0.90 if supplier["tier"] == 2 else 0.85)
-        base_on_time = 0.92 if supplier["tier"] == 1 else (0.87 if supplier["tier"] == 2 else 0.80)
-        base_cost = 1.0 if supplier["tier"] == 1 else (0.95 if supplier["tier"] == 2 else 0.90)
-        
-        # Add some random variation
-        quality = min(1.0, max(0.7, base_quality * np.random.normal(1, 0.03)))
-        on_time = min(1.0, max(0.6, base_on_time * np.random.normal(1, 0.04)))
-        cost_efficiency = min(1.2, max(0.8, base_cost * np.random.normal(1, 0.05)))
-        
-        return {
-            "supplier_id": supplier_id,
-            "supplier_name": supplier["name"],
-            "category": supplier["category"],
-            "tier": supplier["tier"],
-            "quality_score": round(quality, 2),
-            "on_time_delivery_rate": round(on_time, 2),
-            "cost_efficiency_score": round(cost_efficiency, 2),
-            "lead_time_days": round(10 * (3 - supplier["tier"]) * np.random.normal(1, 0.1), 1),
-            "defect_rate": round((1 - quality) * 100, 2)
-        }
-
-
-class EconomicDataAPI(APIClient):
-    """Client for economic data APIs"""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize Economic Data API client"""
-        super().__init__(
-            base_url="https://economic-data-api.example.com",  # Replace with actual API URL
-            api_key=api_key,
-            rate_limit=5,
-            rate_period=60
-        )
-    
-    def get_economic_indicators(self, country: str, indicators: List[str]) -> Dict:
-        """
-        Get economic indicators for a country
-        
-        Args:
-            country: Country code
-            indicators: List of indicator codes
-            
-        Returns:
-            Economic indicator data
-        """
-        logger.info(f"Fetching economic indicators for {country}: {indicators}")
-        
-        try:
-            # Mock implementation for demonstration
-            return self._mock_get_economic_indicators(country, indicators)
-            
-        except Exception as e:
-            logger.error(f"Error fetching economic indicators: {str(e)}")
-            return {}
-    
-    def _mock_get_economic_indicators(self, country: str, indicators: List[str]) -> Dict:
-        """Mock implementation of get_economic_indicators for demonstration"""
-        # Base values for different countries
-        country_data = {
-            "USA": {"gdp_growth": 2.3, "inflation": 2.1, "unemployment": 3.8, "consumer_confidence": 110},
-            "China": {"gdp_growth": 5.2, "inflation": 2.5, "unemployment": 4.1, "consumer_confidence": 115},
-            "Germany": {"gdp_growth": 1.1, "inflation": 1.8, "unemployment": 3.2, "consumer_confidence": 105},
-            "UK": {"gdp_growth": 1.4, "inflation": 2.2, "unemployment": 4.0, "consumer_confidence": 98},
-            "Japan": {"gdp_growth": 0.7, "inflation": 0.5, "unemployment": 2.6, "consumer_confidence": 95}
-        }
-        
-        # Get country data or use default values
-        data = country_data.get(country, {"gdp_growth": 2.0, "inflation": 2.0, "unemployment": 5.0, "consumer_confidence": 100})
-        
-        # Filter to requested indicators and add time series data
-        result = {"country": country, "indicators": {}}
-        
-        for indicator in indicators:
-            if indicator in data:
-                # Create time series for the past 12 months
-                time_series = []
-                base_value = data[indicator]
+            location = city
+            if country_code:
+                location = f"{city},{country_code}"
                 
-                for i in range(12):
-                    month = datetime.now() - timedelta(days=30*(12-i))
-                    # Add some trend and noise to the base value
-                    trend = (i - 6) * 0.05  # Slight trend over time
-                    noise = np.random.normal(0, base_value * 0.03)  # Random noise
-                    value = base_value + trend + noise
-                    
-                    time_series.append({
-                        "date": month.strftime("%Y-%m"),
-                        "value": round(value, 2)
-                    })
-                
-                result["indicators"][indicator] = {
-                    "current_value": round(time_series[-1]["value"], 2),
-                    "historical_data": time_series
-                }
+            logger.info(f"Fetching current weather for {location}")
+            
+            endpoint = "weather"
+            params = {
+                "q": location,
+                "units": "metric",
+                "appid": self.api_key
+            }
+            
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                params=params
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Error fetching weather data: {str(e)}")
+            return {}
+    
+    def get_forecast(self, city: str, country_code: Optional[str] = None) -> Dict:
+        """
+        Get 5-day weather forecast for a location
         
-        return result
+        Args:
+            city: City name
+            country_code: ISO 3166 country code (optional)
+            
+        Returns:
+            Weather forecast data
+        """
+        try:
+            location = city
+            if country_code:
+                location = f"{city},{country_code}"
+                
+            logger.info(f"Fetching weather forecast for {location}")
+            
+            endpoint = "forecast"
+            params = {
+                "q": location,
+                "units": "metric",
+                "appid": self.api_key
+            }
+            
+            response = requests.get(
+                f"{self.base_url}/{endpoint}",
+                params=params
+            )
+            
+            response.raise_for_status()
+            return response.json()
+            
+        except Exception as e:
+            logger.error(f"Error fetching weather forecast: {str(e)}")
+            return {}
 
 
 class DataTransformer:
     """Transforms raw API data into a unified format for analysis"""
     
-    def transform_stock_data(self, stock_data: Dict) -> pd.DataFrame:
+    def transform_flight_data(self, flight_data: List) -> pd.DataFrame:
         """
-        Transform stock chart data into a DataFrame
+        Transform flight data into a DataFrame for logistics analysis
         
         Args:
-            stock_data: Raw stock chart data from Yahoo Finance API
+            flight_data: Raw flight data from OpenSky Network API
             
         Returns:
             Pandas DataFrame with transformed data
         """
         try:
-            # Extract relevant data from the API response
-            result = stock_data.get("chart", {}).get("result", [{}])[0]
-            meta = result.get("meta", {})
-            timestamps = result.get("timestamp", [])
-            indicators = result.get("indicators", {})
-            quotes = indicators.get("quote", [{}])[0]
+            if not flight_data:
+                return pd.DataFrame()
             
             # Create DataFrame
-            df = pd.DataFrame({
-                "timestamp": timestamps,
-                "open": quotes.get("open", []),
-                "high": quotes.get("high", []),
-                "low": quotes.get("low", []),
-                "close": quotes.get("close", []),
-                "volume": quotes.get("volume", [])
-            })
+            df = pd.DataFrame(flight_data)
             
-            # Convert timestamp to datetime
-            df["date"] = pd.to_datetime(df["timestamp"], unit="s")
+            # Convert timestamps to datetime
+            if 'firstSeen' in df.columns:
+                df['firstSeen'] = pd.to_datetime(df['firstSeen'], unit='s')
+            if 'lastSeen' in df.columns:
+                df['lastSeen'] = pd.to_datetime(df['lastSeen'], unit='s')
             
-            # Add symbol and currency information
-            df["symbol"] = meta.get("symbol", "")
-            df["currency"] = meta.get("currency", "USD")
+            # Calculate flight duration if possible
+            if 'firstSeen' in df.columns and 'lastSeen' in df.columns:
+                df['duration_hours'] = (df['lastSeen'] - df['firstSeen']).dt.total_seconds() / 3600
             
             return df
             
         except Exception as e:
-            logger.error(f"Error transforming stock data: {str(e)}")
+            logger.error(f"Error transforming flight data: {str(e)}")
             return pd.DataFrame()
     
-    def transform_sales_data(self, sales_data: Dict) -> pd.DataFrame:
+    def transform_exchange_rate_data(self, exchange_data: Dict) -> pd.DataFrame:
         """
-        Transform retail sales data into a DataFrame
+        Transform exchange rate data into a DataFrame
         
         Args:
-            sales_data: Raw sales data from Retail Market API
+            exchange_data: Raw exchange rate data
             
         Returns:
             Pandas DataFrame with transformed data
         """
         try:
-            # Create DataFrame from the sales data
-            df = pd.DataFrame({
-                "date": sales_data.get("dates", []),
-                "sales": sales_data.get("sales", [])
-            })
+            if not exchange_data or 'rates' not in exchange_data:
+                return pd.DataFrame()
             
-            # Convert date strings to datetime
-            df["date"] = pd.to_datetime(df["date"])
+            # Extract data from response
+            base_currency = exchange_data.get('base', 'USD')
+            date = exchange_data.get('date', datetime.now().strftime('%Y-%m-%d'))
+            rates = exchange_data.get('rates', {})
             
-            # Add category information
-            df["category"] = sales_data.get("category", "")
+            # Create DataFrame
+            data = []
+            for currency, rate in rates.items():
+                data.append({
+                    'date': date,
+                    'base_currency': base_currency,
+                    'target_currency': currency,
+                    'exchange_rate': rate
+                })
+            
+            df = pd.DataFrame(data)
+            
+            # Convert date to datetime
+            df['date'] = pd.to_datetime(df['date'])
             
             return df
             
         except Exception as e:
-            logger.error(f"Error transforming sales data: {str(e)}")
+            logger.error(f"Error transforming exchange rate data: {str(e)}")
             return pd.DataFrame()
     
-    def transform_shipping_data(self, shipping_data: Dict) -> pd.DataFrame:
+    def transform_weather_data(self, weather_data: Dict) -> pd.DataFrame:
         """
-        Transform shipping data into a DataFrame
+        Transform weather data into a DataFrame
         
         Args:
-            shipping_data: Raw shipping data from Supply Chain API
+            weather_data: Raw weather data
             
         Returns:
             Pandas DataFrame with transformed data
         """
         try:
-            # Create a single-row DataFrame from the shipping data
-            df = pd.DataFrame([{
-                "origin": shipping_data.get("origin", ""),
-                "destination": shipping_data.get("destination", ""),
-                "transit_time_days": shipping_data.get("average_transit_time_days", 0),
-                "cost_per_kg_usd": shipping_data.get("cost_per_kg_usd", 0),
-                "on_time_delivery_rate": shipping_data.get("on_time_delivery_rate", 0),
-                "carbon_footprint": shipping_data.get("carbon_footprint_kg_co2_per_ton", 0)
-            }])
+            if not weather_data or 'name' not in weather_data:
+                return pd.DataFrame()
+            
+            # Extract main weather data
+            city = weather_data.get('name', '')
+            country = weather_data.get('sys', {}).get('country', '')
+            timestamp = weather_data.get('dt', 0)
+            
+            main_data = weather_data.get('main', {})
+            temperature = main_data.get('temp', 0)
+            feels_like = main_data.get('feels_like', 0)
+            humidity = main_data.get('humidity', 0)
+            pressure = main_data.get('pressure', 0)
+            
+            weather_desc = weather_data.get('weather', [{}])[0].get('description', '')
+            
+            wind_data = weather_data.get('wind', {})
+            wind_speed = wind_data.get('speed', 0)
+            wind_direction = wind_data.get('deg', 0)
+            
+            # Create DataFrame
+            data = [{
+                'city': city,
+                'country': country,
+                'timestamp': pd.to_datetime(timestamp, unit='s'),
+                'temperature': temperature,
+                'feels_like': feels_like,
+                'humidity': humidity,
+                'pressure': pressure,
+                'weather_description': weather_desc,
+                'wind_speed': wind_speed,
+                'wind_direction': wind_direction
+            }]
+            
+            df = pd.DataFrame(data)
             
             return df
             
         except Exception as e:
-            logger.error(f"Error transforming shipping data: {str(e)}")
+            logger.error(f"Error transforming weather data: {str(e)}")
             return pd.DataFrame()
     
-    def transform_supplier_data(self, supplier_data: Dict) -> pd.DataFrame:
+    def transform_weather_forecast(self, forecast_data: Dict) -> pd.DataFrame:
         """
-        Transform supplier performance data into a DataFrame
+        Transform weather forecast data into a DataFrame
         
         Args:
-            supplier_data: Raw supplier data from Supply Chain API
+            forecast_data: Raw weather forecast data
             
         Returns:
             Pandas DataFrame with transformed data
         """
         try:
-            # Create a single-row DataFrame from the supplier data
-            df = pd.DataFrame([{
-                "supplier_id": supplier_data.get("supplier_id", ""),
-                "supplier_name": supplier_data.get("supplier_name", ""),
-                "category": supplier_data.get("category", ""),
-                "tier": supplier_data.get("tier", 0),
-                "quality_score": supplier_data.get("quality_score", 0),
-                "on_time_delivery_rate": supplier_data.get("on_time_delivery_rate", 0),
-                "cost_efficiency_score": supplier_data.get("cost_efficiency_score", 0),
-                "lead_time_days": supplier_data.get("lead_time_days", 0),
-                "defect_rate": supplier_data.get("defect_rate", 0)
-            }])
+            if not forecast_data or 'list' not in forecast_data:
+                return pd.DataFrame()
             
-            return df
+            # Extract city info
+            city_data = forecast_data.get('city', {})
+            city = city_data.get('name', '')
+            country = city_data.get('country', '')
             
-        except Exception as e:
-            logger.error(f"Error transforming supplier data: {str(e)}")
-            return pd.DataFrame()
-    
-    def transform_economic_data(self, economic_data: Dict) -> pd.DataFrame:
-        """
-        Transform economic indicator data into a DataFrame
-        
-        Args:
-            economic_data: Raw economic data from Economic Data API
+            # Process forecast entries
+            forecast_entries = forecast_data.get('list', [])
+            data = []
             
-        Returns:
-            Pandas DataFrame with transformed data
-        """
-        try:
-            country = economic_data.get("country", "")
-            indicators = economic_data.get("indicators", {})
-            
-            # Create a list to hold all data points
-            data_points = []
-            
-            # Process each indicator
-            for indicator_name, indicator_data in indicators.items():
-                historical_data = indicator_data.get("historical_data", [])
+            for entry in forecast_entries:
+                timestamp = entry.get('dt', 0)
+                main_data = entry.get('main', {})
                 
-                for data_point in historical_data:
-                    data_points.append({
-                        "country": country,
-                        "indicator": indicator_name,
-                        "date": data_point.get("date", ""),
-                        "value": data_point.get("value", 0)
-                    })
+                weather_desc = ''
+                if entry.get('weather') and len(entry.get('weather')) > 0:
+                    weather_desc = entry['weather'][0].get('description', '')
+                
+                wind_data = entry.get('wind', {})
+                
+                data.append({
+                    'city': city,
+                    'country': country,
+                    'timestamp': pd.to_datetime(timestamp, unit='s'),
+                    'temperature': main_data.get('temp', 0),
+                    'feels_like': main_data.get('feels_like', 0),
+                    'humidity': main_data.get('humidity', 0),
+                    'pressure': main_data.get('pressure', 0),
+                    'weather_description': weather_desc,
+                    'wind_speed': wind_data.get('speed', 0),
+                    'wind_direction': wind_data.get('deg', 0)
+                })
             
-            # Create DataFrame
-            df = pd.DataFrame(data_points)
-            
-            # Convert date strings to datetime
-            if not df.empty and "date" in df.columns:
-                df["date"] = pd.to_datetime(df["date"])
+            df = pd.DataFrame(data)
             
             return df
             
         except Exception as e:
-            logger.error(f"Error transforming economic data: {str(e)}")
+            logger.error(f"Error transforming weather forecast data: {str(e)}")
             return pd.DataFrame()
 
 
 class DataStorage:
     """Handles storage and retrieval of processed data"""
     
-    def __init__(self, db_path: str = "retail_data.db"):
+    def __init__(self, db_path: str = "supply_chain_data.db"):
         """
         Initialize the data storage
         
@@ -796,67 +571,45 @@ class DataStorage:
             
             # Create tables for different data types
             cursor.execute('''
-            CREATE TABLE IF NOT EXISTS stock_data (
+            CREATE TABLE IF NOT EXISTS flight_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                symbol TEXT,
+                icao24 TEXT,
+                callsign TEXT,
+                origin_country TEXT,
+                firstSeen TIMESTAMP,
+                lastSeen TIMESTAMP,
+                departure_airport TEXT,
+                arrival_airport TEXT,
+                duration_hours REAL,
+                created_at TEXT
+            )
+            ''')
+            
+            cursor.execute('''
+            CREATE TABLE IF NOT EXISTS exchange_rates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 date TEXT,
-                open REAL,
-                high REAL,
-                low REAL,
-                close REAL,
-                volume INTEGER,
-                currency TEXT,
-                timestamp INTEGER,
+                base_currency TEXT,
+                target_currency TEXT,
+                exchange_rate REAL,
                 created_at TEXT
             )
             ''')
             
             cursor.execute('''
-            CREATE TABLE IF NOT EXISTS sales_data (
+            CREATE TABLE IF NOT EXISTS weather_data (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                category TEXT,
-                date TEXT,
-                sales INTEGER,
-                created_at TEXT
-            )
-            ''')
-            
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS shipping_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                origin TEXT,
-                destination TEXT,
-                transit_time_days REAL,
-                cost_per_kg_usd REAL,
-                on_time_delivery_rate REAL,
-                carbon_footprint REAL,
-                created_at TEXT
-            )
-            ''')
-            
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS supplier_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                supplier_id TEXT,
-                supplier_name TEXT,
-                category TEXT,
-                tier INTEGER,
-                quality_score REAL,
-                on_time_delivery_rate REAL,
-                cost_efficiency_score REAL,
-                lead_time_days REAL,
-                defect_rate REAL,
-                created_at TEXT
-            )
-            ''')
-            
-            cursor.execute('''
-            CREATE TABLE IF NOT EXISTS economic_data (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                city TEXT,
                 country TEXT,
-                indicator TEXT,
-                date TEXT,
-                value REAL,
+                timestamp TIMESTAMP,
+                temperature REAL,
+                feels_like REAL,
+                humidity REAL,
+                pressure REAL,
+                weather_description TEXT,
+                wind_speed REAL,
+                wind_direction REAL,
+                forecast BOOLEAN,
                 created_at TEXT
             )
             ''')
@@ -867,15 +620,15 @@ class DataStorage:
         except Exception as e:
             logger.error(f"Error initializing database: {str(e)}")
     
-    def store_stock_data(self, df: pd.DataFrame):
+    def store_flight_data(self, df: pd.DataFrame):
         """
-        Store stock data in the database
+        Store flight data in the database
         
         Args:
-            df: DataFrame containing stock data
+            df: DataFrame containing flight data
         """
         if df.empty:
-            logger.warning("Attempted to store empty stock data")
+            logger.warning("Attempted to store empty flight data")
             return
         
         try:
@@ -885,23 +638,23 @@ class DataStorage:
             df["created_at"] = datetime.now().isoformat()
             
             # Store in database
-            df.to_sql("stock_data", conn, if_exists="append", index=False)
+            df.to_sql("flight_data", conn, if_exists="append", index=False)
             
             conn.close()
-            logger.info(f"Stored {len(df)} stock data records")
+            logger.info(f"Stored {len(df)} flight data records")
             
         except Exception as e:
-            logger.error(f"Error storing stock data: {str(e)}")
+            logger.error(f"Error storing flight data: {str(e)}")
     
-    def store_sales_data(self, df: pd.DataFrame):
+    def store_exchange_rate_data(self, df: pd.DataFrame):
         """
-        Store sales data in the database
+        Store exchange rate data in the database
         
         Args:
-            df: DataFrame containing sales data
+            df: DataFrame containing exchange rate data
         """
         if df.empty:
-            logger.warning("Attempted to store empty sales data")
+            logger.warning("Attempted to store empty exchange rate data")
             return
         
         try:
@@ -911,91 +664,41 @@ class DataStorage:
             df["created_at"] = datetime.now().isoformat()
             
             # Store in database
-            df.to_sql("sales_data", conn, if_exists="append", index=False)
+            df.to_sql("exchange_rates", conn, if_exists="append", index=False)
             
             conn.close()
-            logger.info(f"Stored {len(df)} sales data records")
+            logger.info(f"Stored {len(df)} exchange rate records")
             
         except Exception as e:
-            logger.error(f"Error storing sales data: {str(e)}")
+            logger.error(f"Error storing exchange rate data: {str(e)}")
     
-    def store_shipping_data(self, df: pd.DataFrame):
+    def store_weather_data(self, df: pd.DataFrame, is_forecast: bool = False):
         """
-        Store shipping data in the database
+        Store weather data in the database
         
         Args:
-            df: DataFrame containing shipping data
+            df: DataFrame containing weather data
+            is_forecast: Whether the data is a forecast
         """
         if df.empty:
-            logger.warning("Attempted to store empty shipping data")
+            logger.warning("Attempted to store empty weather data")
             return
         
         try:
             conn = sqlite3.connect(self.db_path)
             
-            # Add creation timestamp
+            # Add creation timestamp and forecast flag
             df["created_at"] = datetime.now().isoformat()
+            df["forecast"] = is_forecast
             
             # Store in database
-            df.to_sql("shipping_data", conn, if_exists="append", index=False)
+            df.to_sql("weather_data", conn, if_exists="append", index=False)
             
             conn.close()
-            logger.info(f"Stored {len(df)} shipping data records")
+            logger.info(f"Stored {len(df)} weather data records")
             
         except Exception as e:
-            logger.error(f"Error storing shipping data: {str(e)}")
-    
-    def store_supplier_data(self, df: pd.DataFrame):
-        """
-        Store supplier data in the database
-        
-        Args:
-            df: DataFrame containing supplier data
-        """
-        if df.empty:
-            logger.warning("Attempted to store empty supplier data")
-            return
-        
-        try:
-            conn = sqlite3.connect(self.db_path)
-            
-            # Add creation timestamp
-            df["created_at"] = datetime.now().isoformat()
-            
-            # Store in database
-            df.to_sql("supplier_data", conn, if_exists="append", index=False)
-            
-            conn.close()
-            logger.info(f"Stored {len(df)} supplier data records")
-            
-        except Exception as e:
-            logger.error(f"Error storing supplier data: {str(e)}")
-    
-    def store_economic_data(self, df: pd.DataFrame):
-        """
-        Store economic data in the database
-        
-        Args:
-            df: DataFrame containing economic data
-        """
-        if df.empty:
-            logger.warning("Attempted to store empty economic data")
-            return
-        
-        try:
-            conn = sqlite3.connect(self.db_path)
-            
-            # Add creation timestamp
-            df["created_at"] = datetime.now().isoformat()
-            
-            # Store in database
-            df.to_sql("economic_data", conn, if_exists="append", index=False)
-            
-            conn.close()
-            logger.info(f"Stored {len(df)} economic data records")
-            
-        except Exception as e:
-            logger.error(f"Error storing economic data: {str(e)}")
+            logger.error(f"Error storing weather data: {str(e)}")
     
     def get_latest_data(self, table_name: str, limit: int = 100) -> pd.DataFrame:
         """
@@ -1022,41 +725,14 @@ class DataStorage:
         except Exception as e:
             logger.error(f"Error retrieving data from {table_name}: {str(e)}")
             return pd.DataFrame()
-    
-    def get_data_by_date_range(self, table_name: str, start_date: str, end_date: str) -> pd.DataFrame:
-        """
-        Retrieve data within a date range
-        
-        Args:
-            table_name: Name of the table to query
-            start_date: Start date in ISO format (YYYY-MM-DD)
-            end_date: End date in ISO format (YYYY-MM-DD)
-            
-        Returns:
-            DataFrame containing the data within the date range
-        """
-        try:
-            conn = sqlite3.connect(self.db_path)
-            
-            query = f"SELECT * FROM {table_name} WHERE date BETWEEN '{start_date}' AND '{end_date}'"
-            df = pd.read_sql_query(query, conn)
-            
-            conn.close()
-            logger.info(f"Retrieved {len(df)} records from {table_name} between {start_date} and {end_date}")
-            
-            return df
-            
-        except Exception as e:
-            logger.error(f"Error retrieving data from {table_name} by date range: {str(e)}")
-            return pd.DataFrame()
 
 
 class DataExtractionAgent:
     """
-    Main agent class for data extraction and transformation
+    Main agent class for supply chain data extraction
     
-    This agent coordinates the extraction of data from multiple sources,
-    transforms it into a unified format, and stores it for use by other agents.
+    This agent extracts data from various APIs relevant to supply chain
+    operations and stores it in a SQLite database for analysis.
     """
     
     def __init__(self, config_path: Optional[str] = None):
@@ -1070,37 +746,35 @@ class DataExtractionAgent:
         self.config = self._load_config(config_path)
         
         # Initialize API clients
-        self.yahoo_finance_api = YahooFinanceAPI(api_key=self.config.get("yahoo_finance_api_key"))
-        self.retail_market_api = RetailMarketAPI(api_key=self.config.get("retail_market_api_key"))
-        self.supply_chain_api = SupplyChainAPI(api_key=self.config.get("supply_chain_api_key"))
-        self.economic_data_api = EconomicDataAPI(api_key=self.config.get("economic_data_api_key"))
+        self.opensky_api = OpenSkyNetworkAPI(
+            username=self.config.get("opensky_username"),
+            password=self.config.get("opensky_password")
+        )
+        
+        self.exchange_api = ExchangeRatesAPI(
+            api_key=self.config.get("exchange_api_key")
+        )
+        
+        self.weather_api = WeatherAPI(
+            api_key=self.config.get("openweather_api_key")
+        )
         
         # Initialize data transformer
         self.transformer = DataTransformer()
         
         # Initialize data storage
-        self.storage = DataStorage(db_path=self.config.get("db_path", "retail_data.db"))
+        self.storage = DataStorage(db_path=self.config.get("db_path", "supply_chain_data.db"))
         
-        # Set up retail symbols to track
-        self.retail_symbols = self.config.get("retail_symbols", ["WMT", "TGT", "COST", "AMZN"])
-        
-        # Set up product categories to track
-        self.product_categories = self.config.get("product_categories", ["electronics", "clothing", "groceries", "home"])
-        
-        # Set up suppliers to track
-        self.suppliers = self.config.get("suppliers", ["SUP001", "SUP002", "SUP003", "SUP004", "SUP005"])
-        
-        # Set up shipping routes to track
-        self.shipping_routes = self.config.get("shipping_routes", [
-            {"origin": "China", "destination": "USA"},
-            {"origin": "USA", "destination": "Europe"},
-            {"origin": "Mexico", "destination": "USA"}
+        # Set up locations to track
+        self.supply_chain_locations = self.config.get("supply_chain_locations", [
+            {"city": "Shanghai", "country": "CN", "airport": "ZSPD"},
+            {"city": "Singapore", "country": "SG", "airport": "WSSS"},
+            {"city": "Rotterdam", "country": "NL", "airport": "EHRD"},
+            {"city": "Los Angeles", "country": "US", "airport": "KLAX"},
+            {"city": "New York", "country": "US", "airport": "KJFK"}
         ])
         
-        # Set up economic indicators to track
-        self.economic_indicators = self.config.get("economic_indicators", ["gdp_growth", "inflation", "unemployment", "consumer_confidence"])
-        
-        logger.info("Data Extraction Agent initialized")
+        logger.info("Data Extraction Agent initialized for supply chain analytics")
     
     def _load_config(self, config_path: Optional[str]) -> Dict:
         """
@@ -1113,20 +787,18 @@ class DataExtractionAgent:
             Configuration dictionary
         """
         default_config = {
-            "yahoo_finance_api_key": None,
-            "retail_market_api_key": None,
-            "supply_chain_api_key": None,
-            "economic_data_api_key": None,
-            "db_path": "retail_data.db",
-            "retail_symbols": ["WMT", "TGT", "COST", "AMZN"],
-            "product_categories": ["electronics", "clothing", "groceries", "home"],
-            "suppliers": ["SUP001", "SUP002", "SUP003", "SUP004", "SUP005"],
-            "shipping_routes": [
-                {"origin": "China", "destination": "USA"},
-                {"origin": "USA", "destination": "Europe"},
-                {"origin": "Mexico", "destination": "USA"}
-            ],
-            "economic_indicators": ["gdp_growth", "inflation", "unemployment", "consumer_confidence"]
+            "opensky_username": None,
+            "opensky_password": None,
+            "exchange_api_key": None,
+            "openweather_api_key": None,
+            "db_path": "supply_chain_data.db",
+            "supply_chain_locations": [
+                {"city": "Shanghai", "country": "CN", "airport": "ZSPD"},
+                {"city": "Singapore", "country": "SG", "airport": "WSSS"},
+                {"city": "Rotterdam", "country": "NL", "airport": "EHRD"},
+                {"city": "Los Angeles", "country": "US", "airport": "KLAX"},
+                {"city": "New York", "country": "US", "airport": "KJFK"}
+            ]
         }
         
         if config_path and os.path.exists(config_path):
@@ -1141,120 +813,119 @@ class DataExtractionAgent:
         
         return default_config
     
-    def extract_stock_data(self):
-        """Extract and store stock data for retail companies"""
-        logger.info("Starting extraction of stock data")
+    def extract_flight_data(self):
+        """Extract and store flight data for supply chain logistics"""
+        logger.info("Starting extraction of flight data for supply chain logistics")
         
-        for symbol in self.retail_symbols:
-            try:
-                # Get stock chart data
-                stock_data = self.yahoo_finance_api.get_stock_chart(symbol, interval="1d", range_period="3mo")
-                
-                # Transform data
-                df = self.transformer.transform_stock_data(stock_data)
-                
-                # Store data
-                if not df.empty:
-                    self.storage.store_stock_data(df)
-                
-            except Exception as e:
-                logger.error(f"Error processing stock data for {symbol}: {str(e)}")
+        for location in self.supply_chain_locations:
+            airport = location.get("airport")
+            if airport:
+                try:
+                    # Get flight data for this location
+                    flight_data = self.opensky_api.get_flights(airport=airport)
+                    
+                    # Transform data
+                    df = self.transformer.transform_flight_data(flight_data)
+                    
+                    # Store data
+                    if not df.empty:
+                        self.storage.store_flight_data(df)
+                        logger.info(f"Successfully extracted and stored flight data for {airport}")
+                    else:
+                        logger.warning(f"No flight data retrieved for {airport}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing flight data for {airport}: {str(e)}")
     
-    def extract_sales_data(self):
-        """Extract and store sales data for product categories"""
-        logger.info("Starting extraction of sales data")
+    def extract_exchange_rate_data(self):
+        """Extract and store exchange rate data for financial risk analysis"""
+        logger.info("Starting extraction of exchange rate data for financial risk analysis")
         
-        for category in self.product_categories:
-            try:
-                # Get sales data
-                sales_data = self.retail_market_api.get_sales_data(category, date_range="3months")
+        try:
+            # Get latest exchange rates
+            exchange_data = self.exchange_api.get_latest_rates()
+            
+            # Transform data
+            df = self.transformer.transform_exchange_rate_data(exchange_data)
+            
+            # Store data
+            if not df.empty:
+                self.storage.store_exchange_rate_data(df)
+                logger.info("Successfully extracted and stored exchange rate data")
+            else:
+                logger.warning("No exchange rate data retrieved")
+            
+            # Get historical rates for the past week
+            for i in range(1, 8):
+                date = (datetime.now() - timedelta(days=i)).strftime('%Y-%m-%d')
+                historical_data = self.exchange_api.get_historical_rates(date=date)
                 
-                # Transform data
-                df = self.transformer.transform_sales_data(sales_data)
+                # Transform and store historical data
+                hist_df = self.transformer.transform_exchange_rate_data(historical_data)
                 
-                # Store data
-                if not df.empty:
-                    self.storage.store_sales_data(df)
+                if not hist_df.empty:
+                    self.storage.store_exchange_rate_data(hist_df)
+                    logger.info(f"Successfully extracted and stored historical exchange rate data for {date}")
+                else:
+                    logger.warning(f"No historical exchange rate data retrieved for {date}")
                 
-            except Exception as e:
-                logger.error(f"Error processing sales data for {category}: {str(e)}")
+                # Respect API rate limits
+                time.sleep(1)
+            
+        except Exception as e:
+            logger.error(f"Error processing exchange rate data: {str(e)}")
     
-    def extract_shipping_data(self):
-        """Extract and store shipping data for routes"""
-        logger.info("Starting extraction of shipping data")
+    def extract_weather_data(self):
+        """Extract and store weather data for supply chain risk analysis"""
+        logger.info("Starting extraction of weather data for supply chain risk analysis")
         
-        for route in self.shipping_routes:
-            try:
-                # Get shipping data
-                shipping_data = self.supply_chain_api.get_shipping_data(
-                    origin=route["origin"],
-                    destination=route["destination"]
-                )
+        for location in self.supply_chain_locations:
+            city = location.get("city")
+            country = location.get("country")
+            
+            if city:
+                try:
+                    # Get current weather for this location
+                    weather_data = self.weather_api.get_current_weather(city=city, country_code=country)
+                    
+                    # Transform data
+                    df = self.transformer.transform_weather_data(weather_data)
+                    
+                    # Store data
+                    if not df.empty:
+                        self.storage.store_weather_data(df, is_forecast=False)
+                        logger.info(f"Successfully extracted and stored current weather data for {city}")
+                    else:
+                        logger.warning(f"No current weather data retrieved for {city}")
+                    
+                    # Get forecast for this location
+                    forecast_data = self.weather_api.get_forecast(city=city, country_code=country)
+                    
+                    # Transform data
+                    forecast_df = self.transformer.transform_weather_forecast(forecast_data)
+                    
+                    # Store data
+                    if not forecast_df.empty:
+                        self.storage.store_weather_data(forecast_df, is_forecast=True)
+                        logger.info(f"Successfully extracted and stored weather forecast data for {city}")
+                    else:
+                        logger.warning(f"No weather forecast data retrieved for {city}")
+                    
+                except Exception as e:
+                    logger.error(f"Error processing weather data for {city}: {str(e)}")
                 
-                # Transform data
-                df = self.transformer.transform_shipping_data(shipping_data)
-                
-                # Store data
-                if not df.empty:
-                    self.storage.store_shipping_data(df)
-                
-            except Exception as e:
-                logger.error(f"Error processing shipping data for {route}: {str(e)}")
-    
-    def extract_supplier_data(self):
-        """Extract and store supplier performance data"""
-        logger.info("Starting extraction of supplier data")
-        
-        for supplier_id in self.suppliers:
-            try:
-                # Get supplier data
-                supplier_data = self.supply_chain_api.get_supplier_performance(supplier_id)
-                
-                # Transform data
-                df = self.transformer.transform_supplier_data(supplier_data)
-                
-                # Store data
-                if not df.empty:
-                    self.storage.store_supplier_data(df)
-                
-            except Exception as e:
-                logger.error(f"Error processing supplier data for {supplier_id}: {str(e)}")
-    
-    def extract_economic_data(self):
-        """Extract and store economic indicator data"""
-        logger.info("Starting extraction of economic data")
-        
-        countries = ["USA", "China", "Germany", "UK", "Japan"]
-        
-        for country in countries:
-            try:
-                # Get economic data
-                economic_data = self.economic_data_api.get_economic_indicators(
-                    country=country,
-                    indicators=self.economic_indicators
-                )
-                
-                # Transform data
-                df = self.transformer.transform_economic_data(economic_data)
-                
-                # Store data
-                if not df.empty:
-                    self.storage.store_economic_data(df)
-                
-            except Exception as e:
-                logger.error(f"Error processing economic data for {country}: {str(e)}")
+                # Respect API rate limits
+                time.sleep(1)
     
     def extract_all_data(self):
         """Extract and store all types of data"""
-        logger.info("Starting extraction of all data")
+        logger.info("Starting extraction of all supply chain data")
         
-        self.extract_stock_data()
-        self.extract_sales_data()
-        self.extract_shipping_data()
-        self.extract_supplier_data()
-        self.extract_economic_data()
+        self.extract_flight_data()
+        self.extract_exchange_rate_data()
+        self.extract_weather_data()
         
-        logger.info("Completed extraction of all data")
+        logger.info("Completed extraction of all supply chain data")
     
     def get_data_for_analysis(self) -> Dict[str, pd.DataFrame]:
         """
@@ -1266,36 +937,12 @@ class DataExtractionAgent:
         logger.info("Retrieving data for analysis")
         
         data = {
-            "stock_data": self.storage.get_latest_data("stock_data"),
-            "sales_data": self.storage.get_latest_data("sales_data"),
-            "shipping_data": self.storage.get_latest_data("shipping_data"),
-            "supplier_data": self.storage.get_latest_data("supplier_data"),
-            "economic_data": self.storage.get_latest_data("economic_data")
+            "flight_data": self.storage.get_latest_data("flight_data"),
+            "exchange_rates": self.storage.get_latest_data("exchange_rates"),
+            "weather_data": self.storage.get_latest_data("weather_data")
         }
         
         return data
-    
-    def run_scheduled_extraction(self, interval_seconds: int = 3600):
-        """
-        Run data extraction on a schedule
-        
-        Args:
-            interval_seconds: Interval between extractions in seconds
-        """
-        logger.info(f"Starting scheduled extraction every {interval_seconds} seconds")
-        
-        while True:
-            try:
-                self.extract_all_data()
-                logger.info(f"Sleeping for {interval_seconds} seconds")
-                time.sleep(interval_seconds)
-            except KeyboardInterrupt:
-                logger.info("Scheduled extraction stopped by user")
-                break
-            except Exception as e:
-                logger.error(f"Error in scheduled extraction: {str(e)}")
-                # Sleep for a shorter time before retrying
-                time.sleep(60)
 
 
 def main():
@@ -1304,7 +951,7 @@ def main():
         # Initialize the agent
         agent = DataExtractionAgent()
         
-        # Extract all data once
+        # Extract all data
         agent.extract_all_data()
         
         # Get the data for analysis
@@ -1314,10 +961,14 @@ def main():
         for data_type, df in data.items():
             if not df.empty:
                 print(f"{data_type}: {len(df)} records")
+                # Show a sample
+                print("Sample data:")
+                print(df.head(2))
+                print()
             else:
                 print(f"{data_type}: No data")
         
-        print("\nData extraction completed successfully.")
+        print("\nSupply chain data extraction completed successfully.")
         print("The extracted data is stored in the database and ready for analysis.")
         
     except Exception as e:
@@ -1325,5 +976,281 @@ def main():
         print(f"Error: {str(e)}")
 
 
+# Simulated API response functions for testing purposes
+# These functions allow testing the code without actual API keys
+def simulate_flight_data():
+    """Generate simulated flight data for testing"""
+    airports = ["ZSPD", "WSSS", "EHRD", "KLAX", "KJFK"]
+    airlines = ["CPA", "SIA", "KLM", "AAL", "UAL", "FDX", "UPS"]
+    countries = ["CN", "SG", "NL", "US", "JP", "KR", "DE", "GB"]
+    
+    current_time = int(datetime.now().timestamp())
+    one_hour_ago = current_time - 3600
+    
+    flights = []
+    for _ in range(50):  # Generate 50 random flights
+        dep_airport = random.choice(airports)
+        arr_airport = random.choice([a for a in airports if a != dep_airport])
+        
+        # Generate random timestamps
+        first_seen = random.randint(one_hour_ago - 86400, one_hour_ago)  # Within the last day
+        flight_duration = random.randint(3600, 36000)  # 1 to 10 hours
+        last_seen = first_seen + flight_duration
+        
+        flight = {
+            "icao24": ''.join(random.choices('0123456789ABCDEF', k=6)),
+            "callsign": random.choice(airlines) + str(random.randint(100, 999)),
+            "origin_country": random.choice(countries),
+            "firstSeen": first_seen,
+            "lastSeen": last_seen,
+            "departure_airport": dep_airport,
+            "arrival_airport": arr_airport
+        }
+        flights.append(flight)
+    
+    return flights
+
+def simulate_exchange_rates():
+    """Generate simulated exchange rate data for testing"""
+    base = "USD"
+    currencies = ["EUR", "GBP", "JPY", "CNY", "SGD", "AUD", "CAD", "CHF", "HKD", "KRW"]
+    
+    rates = {}
+    for currency in currencies:
+        # Create realistic but randomized exchange rates
+        if currency == "EUR":
+            rates[currency] = round(random.uniform(0.85, 0.95), 6)
+        elif currency == "GBP":
+            rates[currency] = round(random.uniform(0.75, 0.85), 6)
+        elif currency == "JPY":
+            rates[currency] = round(random.uniform(105.0, 115.0), 6)
+        elif currency == "CNY":
+            rates[currency] = round(random.uniform(6.3, 6.5), 6)
+        elif currency == "SGD":
+            rates[currency] = round(random.uniform(1.3, 1.4), 6)
+        else:
+            rates[currency] = round(random.uniform(0.5, 2.0), 6)
+    
+    result = {
+        "success": True,
+        "timestamp": int(datetime.now().timestamp()),
+        "base": base,
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "rates": rates
+    }
+    
+    return result
+
+def simulate_weather_data(city, country):
+    """Generate simulated weather data for testing"""
+    # Create realistic temperature ranges based on location
+    temp_ranges = {
+        "Shanghai": (5, 35),
+        "Singapore": (25, 35),
+        "Rotterdam": (0, 25),
+        "Los Angeles": (15, 30),
+        "New York": (-5, 30)
+    }
+    
+    # Default temperature range
+    temp_range = (0, 30)
+    if city in temp_ranges:
+        temp_range = temp_ranges[city]
+    
+    # Generate random weather data
+    temperature = round(random.uniform(temp_range[0], temp_range[1]), 1)
+    
+    weather_conditions = ["clear sky", "few clouds", "scattered clouds", 
+                          "broken clouds", "shower rain", "rain", 
+                          "thunderstorm", "snow", "mist"]
+    
+    weather = {
+        "coord": {"lon": random.uniform(-180, 180), "lat": random.uniform(-90, 90)},
+        "weather": [
+            {
+                "id": random.randint(200, 800),
+                "main": "Weather",
+                "description": random.choice(weather_conditions),
+                "icon": "01d"
+            }
+        ],
+        "main": {
+            "temp": temperature,
+            "feels_like": temperature - random.uniform(-2, 2),
+            "temp_min": temperature - random.uniform(0, 5),
+            "temp_max": temperature + random.uniform(0, 5),
+            "pressure": random.randint(990, 1030),
+            "humidity": random.randint(30, 90)
+        },
+        "visibility": random.randint(5000, 10000),
+        "wind": {
+            "speed": random.uniform(0, 15),
+            "deg": random.randint(0, 359)
+        },
+        "clouds": {
+            "all": random.randint(0, 100)
+        },
+        "dt": int(datetime.now().timestamp()),
+        "sys": {
+            "type": 1,
+            "id": random.randint(1000, 9999),
+            "country": country,
+            "sunrise": int((datetime.now().replace(hour=6, minute=0, second=0)).timestamp()),
+            "sunset": int((datetime.now().replace(hour=18, minute=0, second=0)).timestamp())
+        },
+        "timezone": random.randint(-43200, 43200),
+        "id": random.randint(1000000, 9999999),
+        "name": city,
+        "cod": 200
+    }
+    
+    return weather
+
+def simulate_weather_forecast(city, country):
+    """Generate simulated weather forecast data for testing"""
+    forecast = {
+        "cod": "200",
+        "message": 0,
+        "cnt": 40,
+        "list": [],
+        "city": {
+            "id": random.randint(1000000, 9999999),
+            "name": city,
+            "country": country,
+            "population": random.randint(100000, 10000000),
+            "timezone": random.randint(-43200, 43200),
+            "sunrise": int((datetime.now().replace(hour=6, minute=0, second=0)).timestamp()),
+            "sunset": int((datetime.now().replace(hour=18, minute=0, second=0)).timestamp())
+        }
+    }
+    
+    # Generate forecast entries for the next 5 days, 3-hour intervals
+    current_time = datetime.now()
+    for i in range(40):
+        forecast_time = current_time + timedelta(hours=i*3)
+        
+        # Get base weather for this city
+        base_weather = simulate_weather_data(city, country)
+        
+        # Add some variation for the forecast
+        temp_variation = random.uniform(-5, 5)
+        
+        entry = {
+            "dt": int(forecast_time.timestamp()),
+            "main": {
+                "temp": base_weather["main"]["temp"] + temp_variation,
+                "feels_like": base_weather["main"]["feels_like"] + temp_variation,
+                "temp_min": base_weather["main"]["temp_min"] + temp_variation,
+                "temp_max": base_weather["main"]["temp_max"] + temp_variation,
+                "pressure": base_weather["main"]["pressure"] + random.randint(-10, 10),
+                "humidity": base_weather["main"]["humidity"] + random.randint(-10, 10)
+            },
+            "weather": base_weather["weather"],
+            "wind": {
+                "speed": base_weather["wind"]["speed"] + random.uniform(-2, 2),
+                "deg": random.randint(0, 359)
+            }
+        }
+        
+        forecast["list"].append(entry)
+    
+    return forecast
+
+
+class TestingAPIClient:
+    """Test implementation for when real API keys are not available"""
+    
+    @staticmethod
+    def test_opensky_api():
+        """Test the OpenSky API client with simulated data"""
+        print("Testing OpenSky Network API client...")
+        
+        # Create a mock implementation of the API
+        class MockOpenSkyAPI(OpenSkyNetworkAPI):
+            def get_flights(self, begin_time=None, end_time=None, airport=None):
+                return simulate_flight_data()
+            
+            def get_states(self):
+                return {"states": []}
+        
+        # Initialize and test the mock API
+        api = MockOpenSkyAPI()
+        flights = api.get_flights()
+        
+        print(f"Retrieved {len(flights)} simulated flights")
+        if flights:
+            print("Sample flight data:")
+            print(json.dumps(flights[0], indent=2))
+        
+        return flights
+    
+    @staticmethod
+    def test_exchange_api():
+        """Test the Exchange Rates API client with simulated data"""
+        print("Testing Exchange Rates API client...")
+        
+        # Create a mock implementation of the API
+        class MockExchangeAPI(ExchangeRatesAPI):
+            def get_latest_rates(self, base_currency="USD"):
+                return simulate_exchange_rates()
+            
+            def get_historical_rates(self, date, base_currency="USD"):
+                result = simulate_exchange_rates()
+                result["date"] = date
+                return result
+        
+        # Initialize and test the mock API
+        api = MockExchangeAPI()
+        rates = api.get_latest_rates()
+        
+        print(f"Retrieved exchange rates for {len(rates.get('rates', {}))} currencies")
+        print("Sample exchange rate data:")
+        print(json.dumps(rates, indent=2))
+        
+        return rates
+    
+    @staticmethod
+    def test_weather_api():
+        """Test the Weather API client with simulated data"""
+        print("Testing Weather API client...")
+        
+        # Create a mock implementation of the API
+        class MockWeatherAPI(WeatherAPI):
+            def get_current_weather(self, city, country_code=None):
+                return simulate_weather_data(city, country_code)
+            
+            def get_forecast(self, city, country_code=None):
+                return simulate_weather_forecast(city, country_code)
+        
+        # Initialize and test the mock API
+        api = MockWeatherAPI()
+        weather = api.get_current_weather("Shanghai", "CN")
+        forecast = api.get_forecast("Shanghai", "CN")
+        
+        print("Retrieved current weather data:")
+        print(json.dumps(weather, indent=2))
+        
+        print(f"Retrieved forecast with {len(forecast.get('list', []))} time periods")
+        
+        return weather, forecast
+
+
 if __name__ == "__main__":
-    main()
+    # Check for API keys in environment or config
+    # If not available, use simulated data for testing
+    if (os.environ.get("OPENWEATHER_API_KEY") or 
+        os.environ.get("EXCHANGE_API_KEY") or 
+        os.environ.get("OPENSKY_USERNAME")):
+        main()
+    else:
+        print("No API keys detected. Running in test mode with simulated data.")
+        print("To use real APIs, provide API keys in environment or config file.")
+        print("\n" + "="*50 + "\n")
+        
+        # Run the tests with simulated data
+        test_client = TestingAPIClient()
+        test_client.test_opensky_api()
+        print("\n" + "="*50 + "\n")
+        test_client.test_exchange_api()
+        print("\n" + "="*50 + "\n")
+        test_client.test_weather_api()
